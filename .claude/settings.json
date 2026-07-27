@@ -1,0 +1,42 @@
+{
+	"permissions": {
+		"allow": [
+			"Bash(cargo build:*)",
+			"Bash(cargo test:*)",
+			"Bash(cargo clippy:*)",
+			"Bash(cargo fmt:*)",
+			"Bash(cargo check:*)",
+			"Bash(git status:*)",
+			"Bash(git diff:*)",
+			"Bash(git log:*)",
+			"Bash(/var/data/python/bin/graphify:*)"
+		],
+		"deny": [
+			"Read(../**/.env*)",
+			"Read(../**/.dev.vars*)",
+			"Read(../**/*.pem)"
+		]
+	},
+	"hooks": {
+		"PreToolUse": [
+			{
+				"matcher": "Bash|Grep",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "/var/data/python/bin/graphify hook-guard search"
+					}
+				]
+			},
+			{
+				"matcher": "Read|Glob",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "/var/data/python/bin/graphify hook-guard read"
+					}
+				]
+			}
+		]
+	}
+}

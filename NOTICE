@@ -1,0 +1,14 @@
+Cymose Code
+Copyright 2026 Cymose
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+"Cymose" and the Cymose logo are marks of Cymose. The Apache-2.0 license
+grants rights to the source code in this repository; it does not grant
+permission to use the project name or marks to describe a derived work, or
+in a way that suggests endorsement by or affiliation with Cymose. Forks are
+welcome — please rename.
+
+This repository contains the Cymose Code clients (terminal TUI, VS Code
+extension) and their shared local core. The Cymose backend services they
+talk to are not part of this repository and are not open source.

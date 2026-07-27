@@ -1,0 +1,25 @@
+[package]
+name = "cymose-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Cymose Code terminal client and sidecar"
+
+[[bin]]
+name = "cymose"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.5.61", features = ["derive"] }
+cymose-core.workspace = true
+ratatui = "0.29.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-util", "io-std"] }
+tui-textarea = "0.7.0"
+
+[dev-dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }

@@ -1,0 +1,96 @@
+{
+	"name": "cymose-code",
+	"displayName": "Cymose Code",
+	"description": "Sessions as a graph, models as a chain — the Cymose Code client for VS Code",
+	"version": "0.1.0",
+	"publisher": "cymose",
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/cymose/cymose-code.git"
+	},
+	"engines": {
+		"vscode": "^1.85.0"
+	},
+	"categories": ["AI", "Programming Languages"],
+	"main": "./out/extension.js",
+	"activationEvents": [],
+	"contributes": {
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "cymose",
+					"title": "Cymose",
+					"icon": "media/icon.svg"
+				}
+			]
+		},
+		"views": {
+			"cymose": [
+				{
+					"id": "cymose.sessions",
+					"name": "Sessions"
+				}
+			]
+		},
+		"commands": [
+			{
+				"command": "cymose.newSession",
+				"title": "Cymose: New Session",
+				"icon": "$(add)"
+			},
+			{
+				"command": "cymose.refresh",
+				"title": "Cymose: Refresh Sessions",
+				"icon": "$(refresh)"
+			},
+			{
+				"command": "cymose.showSession",
+				"title": "Cymose: Show Session"
+			},
+			{
+				"command": "cymose.restartSidecar",
+				"title": "Cymose: Restart Core"
+			}
+		],
+		"menus": {
+			"view/title": [
+				{
+					"command": "cymose.newSession",
+					"when": "view == cymose.sessions",
+					"group": "navigation"
+				},
+				{
+					"command": "cymose.refresh",
+					"when": "view == cymose.sessions",
+					"group": "navigation"
+				}
+			]
+		},
+		"configuration": {
+			"title": "Cymose Code",
+			"properties": {
+				"cymose.corePath": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "Path to the `cymose` binary. Empty uses the one bundled with the extension, falling back to `cymose` on PATH — which is what you want when working on the core itself."
+				},
+				"cymose.storePath": {
+					"type": "string",
+					"default": "",
+					"markdownDescription": "Session store to use. Empty uses the shared default, which is what lets a session started in the terminal resume here."
+				}
+			}
+		}
+	},
+	"scripts": {
+		"compile": "tsc -p ./",
+		"watch": "tsc -watch -p ./",
+		"vscode:prepublish": "npm run compile"
+	},
+	"devDependencies": {
+		"@types/node": "^20",
+		"@types/vscode": "^1.85.0",
+		"typescript": "^5.4.0"
+	}
+}

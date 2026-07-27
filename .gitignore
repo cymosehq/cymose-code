@@ -1,0 +1,30 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Node / VS Code extension
+node_modules/
+extension/out/
+extension/dist/
+*.vsix
+*.tsbuildinfo
+.vscode-test/
+
+# Local state — never commit. The session store holds the user's source code,
+# prompts and model output; the credentials file holds their Cymose token.
+*.db
+*.db-wal
+*.db-shm
+.cymose/
+credentials.json
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# graphify knowledge graph (regenerated locally, not shared)
+graphify-out/
+
+# OS
+.DS_Store

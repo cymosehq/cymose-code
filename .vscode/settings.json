@@ -1,0 +1,9 @@
+{
+	"rust-analyzer.linkedProjects": ["Cargo.toml"],
+	"rust-analyzer.check.command": "clippy",
+	"search.exclude": {
+		"**/target": true,
+		"**/node_modules": true,
+		"graphify-out": true
+	}
+}

@@ -1,0 +1,15 @@
+target/
+node_modules/
+extension/out/
+extension/dist/
+*.vsix
+Cargo.lock
+package-lock.json
+.env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+.cymose/
+coverage/

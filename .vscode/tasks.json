@@ -1,0 +1,20 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "compile extension",
+			"type": "npm",
+			"script": "compile",
+			"path": "extension",
+			"problemMatcher": "$tsc",
+			"group": "build"
+		},
+		{
+			"label": "cargo build",
+			"type": "shell",
+			"command": "cargo build",
+			"problemMatcher": "$rustc",
+			"group": "build"
+		}
+	]
+}
