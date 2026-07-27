@@ -15,6 +15,29 @@ Two clients, one core:
 > the agent loop and the model router are still being filled in. See
 > [Roadmap](#roadmap).
 
+## This code was written by an AI
+
+Every line in this repository was written by an AI coding agent (Claude, via
+Claude Code) working from my direction. I decide what gets built, review it at
+the level of behaviour and product, and test it. I do not hand-write the code,
+and I could not have written this by hand — I am not a programmer.
+
+This is stated up front because you deserve to know what you are reading before
+you run it, not after:
+
+- **Read it before you trust it.** There is no experienced human author who
+  reviewed every line for correctness or security. The tests in this repo are
+  real and they pass, but a passing test suite is not a code review.
+- **`run_command` executes commands on your machine.** It asks first by
+  default. Look at what the allowlist does before widening it.
+- **Bugs here are my responsibility, not the model's.** Report them and they
+  get fixed. "The AI wrote it" is an explanation, never an excuse.
+
+If that disqualifies the project for you, that is a reasonable call and no hard
+feelings. If it doesn't: the design decisions are argued in the comments and in
+[docs/](docs/), and I would rather be judged on whether those decisions are
+right than on who typed them.
+
 ## Why sessions form a graph
 
 Nobody runs a thousand-message session with a coding agent. People open a new

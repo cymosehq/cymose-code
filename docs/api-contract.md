@@ -53,12 +53,13 @@ written to the session store, and never included in a bug report — see
 | `POST /v1/code/summarize` | the summariser, when a session ends | synchronous JSON |
 | `POST /v1/promote` | `cymose promote` — outcome to a Web conclusion node | synchronous JSON |
 
-`/v1/code/*` does not exist server-side yet, which is why the agent loop is not
-usable end to end. `api::Client::inference` sends a non-streaming request today
-and will get a 404 until the route lands; asking it for a stream returns
-`Error::NotImplemented` rather than silently buffering, which would look like
-the model hanging. The event shapes below are already parsed and tested
-(`api::parse_stream_event`).
+`/v1/code/*` is implemented on the API and not yet deployed. Both routes accept
+`stream: false` and answer with one JSON body — which is what
+`api::Client::inference` sends today, and what makes the contract testable with
+`curl`. Asking for a stream still returns `Error::NotImplemented` on the client:
+the SSE transport is the remaining piece, and failing loudly beats silently
+buffering a turn that should render as it arrives. The event shapes below are
+already parsed and tested (`api::parse_stream_event`).
 
 ### `POST /v1/code/inference`
 

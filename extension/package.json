@@ -12,7 +12,10 @@
 	"engines": {
 		"vscode": "^1.85.0"
 	},
-	"categories": ["AI", "Programming Languages"],
+	"categories": [
+		"AI",
+		"Programming Languages"
+	],
 	"main": "./out/extension.js",
 	"activationEvents": [],
 	"contributes": {
@@ -92,5 +95,8 @@
 		"@types/node": "^20",
 		"@types/vscode": "^1.85.0",
 		"typescript": "^5.4.0"
+	},
+	"dependencies": {
+		"@vscode/vsce": "^3.9.2"
 	}
 }

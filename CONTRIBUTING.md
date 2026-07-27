@@ -1,5 +1,21 @@
 # Contributing
 
+## How this code gets written
+
+The code here is written by an AI coding agent working from the maintainer's
+direction — see [the note in the README](README.md#this-code-was-written-by-an-ai).
+The maintainer is not a programmer and does not hand-write the code.
+
+Two things follow for you as a contributor:
+
+- **Review carries more weight here than usual.** A pull request that points at
+  a wrong assumption is worth more than one that fixes a typo, and there is no
+  senior author who already caught the obvious things.
+- **Use whatever tools you like, and say so.** AI-assisted contributions are
+  welcome on the same terms as any other: you are responsible for what you
+  submit, you have read it, and you can explain why it is correct. That bar
+  applies to the maintainer too.
+
 ## Before anything else: this repository is public
 
 The rest of Cymose is not. Contributions and reviews are expected to keep the
