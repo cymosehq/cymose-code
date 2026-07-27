@@ -31,13 +31,3 @@ jobs:
           node-version: 20
       - run: npm --prefix extension install
       - run: npm --prefix extension run compile
-
-  obsidian:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - run: npm --prefix obsidian install
-      - run: npm --prefix obsidian run build
