@@ -197,11 +197,7 @@ impl Toolbox {
             let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let rel = path
-                .strip_prefix(&self.root)
-                .unwrap_or(&path)
-                .display()
-                .to_string();
+            let rel = relative_display(&path, &self.root);
             for (i, line) in text.lines().enumerate() {
                 if line.contains(query) {
                     hits.push(format!("{rel}:{}: {}", i + 1, line.trim()));
@@ -253,6 +249,24 @@ impl Toolbox {
         ));
         Ok(ToolOutput::text(text))
     }
+}
+
+/// A workspace-relative path, always with forward slashes.
+///
+/// `Path::display` uses the platform separator, so the same search on the same
+/// repository prints `src/limiter.rs` on Linux and `src\limiter.rs` on Windows.
+/// That matters beyond looks: the model reads these hits and passes one
+/// straight back to `read_file`, and the summary of the session records them.
+/// Forward slashes are accepted by `Path` on Windows too, so normalising here
+/// makes tool output identical everywhere — and a session summary written on
+/// one machine still names files a session on another can open.
+fn relative_display(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn cap(mut content: String) -> (String, bool) {
@@ -387,8 +401,20 @@ mod tests {
                 query: "try_acquire".into(),
             })
             .unwrap();
-        assert!(out.content.contains("src/limiter.rs:1"));
-        assert!(!out.content.contains("target/"));
+        // Forward slashes on every platform — see relative_display.
+        assert!(
+            out.content.contains("src/limiter.rs:1"),
+            "got: {}",
+            out.content
+        );
+        assert!(!out.content.contains("build.rs"));
+    }
+
+    #[test]
+    fn hit_paths_use_forward_slashes_on_every_platform() {
+        let root = Path::new("/workspace");
+        let nested = root.join("src").join("deep").join("limiter.rs");
+        assert_eq!(relative_display(&nested, root), "src/deep/limiter.rs");
     }
 
     #[test]
