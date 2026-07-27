@@ -214,42 +214,134 @@ impl SessionSummary {
     }
 }
 
+/// Where a turn is sent.
+///
+/// 0.1 is BYOK only: the user's own OpenRouter key, straight to OpenRouter,
+/// with nothing of ours in the path. That is the honest shape for a beta —
+/// no account to make, no billing to trust, no service to be down, and the
+/// user can see exactly what each turn costs on their own dashboard.
+///
+/// The Cymose backend is the later half: it exists (see the API's
+/// `/v1/code/*`) and is what Cymose Web syncs through, but it is not wired up
+/// here yet and nothing in this build depends on it.
+#[derive(Debug, Clone)]
+pub enum Backend {
+    OpenRouter {
+        api_key: String,
+    },
+    /// Not usable yet — see [`Client::inference`].
+    Cymose {
+        base_url: String,
+        token: String,
+        device_id: String,
+    },
+}
+
+const OPENROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
+
 pub struct Client {
     http: reqwest::Client,
-    base_url: String,
-    token: Option<String>,
-    device_id: String,
+    backend: Backend,
 }
 
 impl Client {
-    pub fn new(
-        base_url: impl Into<String>,
-        token: Option<String>,
-        device_id: impl Into<String>,
-    ) -> Self {
+    pub fn new(backend: Backend) -> Self {
         Client {
             http: reqwest::Client::new(),
-            base_url: base_url.into().trim_end_matches('/').to_string(),
-            token,
-            device_id: device_id.into(),
+            backend,
         }
     }
 
+    /// BYOK: the 0.1 path.
+    pub fn openrouter(api_key: impl Into<String>) -> Self {
+        Client::new(Backend::OpenRouter {
+            api_key: api_key.into(),
+        })
+    }
+
     pub fn is_authenticated(&self) -> bool {
-        self.token.is_some()
+        match &self.backend {
+            Backend::OpenRouter { api_key } => !api_key.trim().is_empty(),
+            Backend::Cymose { token, .. } => !token.trim().is_empty(),
+        }
     }
 
     /// One agent turn.
     ///
-    /// The SSE transport is not wired up yet, so asking for a stream fails
-    /// loudly rather than silently buffering — which would look like the model
+    /// Streaming is not wired up yet, so asking for a stream fails loudly
+    /// rather than silently buffering — which would look like the model
     /// hanging. The event shapes it will produce are already pinned down in
     /// [`parse_stream_event`].
-    pub async fn inference(&self, req: &InferenceRequest) -> Result<serde_json::Value> {
+    pub async fn inference(&self, req: &InferenceRequest) -> Result<InferenceResult> {
         if req.stream {
             return Err(Error::NotImplemented("streaming inference"));
         }
-        self.post("/v1/code/inference", req).await
+        match &self.backend {
+            Backend::OpenRouter { api_key } => self.openrouter_inference(req, api_key).await,
+            Backend::Cymose { .. } => Err(Error::NotImplemented("the Cymose backend")),
+        }
+    }
+
+    /// The BYOK turn: OpenAI-compatible chat completions, straight to
+    /// OpenRouter.
+    ///
+    /// The translation lives here rather than in the caller because the wire
+    /// format this crate speaks is deliberately not OpenAI's — `input` as a
+    /// parsed object rather than a JSON string is one less place for a tool
+    /// call to get double-encoded — and the agent loop should not have to know
+    /// which backend it is talking to.
+    async fn openrouter_inference(
+        &self,
+        req: &InferenceRequest,
+        api_key: &str,
+    ) -> Result<InferenceResult> {
+        if api_key.trim().is_empty() {
+            return Err(Error::NotAuthenticated);
+        }
+
+        let body = serde_json::json!({
+            "model": req.model,
+            "messages": req.messages.iter().map(openai_message).collect::<Vec<_>>(),
+            "max_tokens": req.max_tokens,
+            "stream": false,
+            "tools": req.tools.iter().map(|t| serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.input_schema,
+                },
+            })).collect::<Vec<_>>(),
+        });
+
+        let response = self
+            .http
+            .post(OPENROUTER_URL)
+            .bearer_auth(api_key)
+            // Attribution on OpenRouter's public leaderboard. Optional, free,
+            // and the only thing we add to a BYOK request.
+            .header("HTTP-Referer", "https://cymose.dev")
+            .header("X-Title", "Cymose Code")
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            let (_, message) = parse_error_body(&text);
+            return Err(match status.as_u16() {
+                401 => Error::NotAuthenticated,
+                402 | 403 => Error::Refused(message),
+                other => Error::Upstream {
+                    status: other,
+                    message,
+                },
+            });
+        }
+
+        let value: serde_json::Value = response.json().await?;
+        Ok(parse_openai_completion(&value))
     }
 
     /// Compresses a finished session into the summary its children inherit.
@@ -257,24 +349,42 @@ impl Client {
     /// Synchronous and unstreamed: it is short, and nothing is waiting on it —
     /// a failure here delays a summary, it doesn't block the agent.
     pub async fn summarize(&self, req: &SummarizeRequest) -> Result<SessionSummary> {
-        self.post("/v1/code/summarize", req).await
+        match &self.backend {
+            // BYOK summarising asks the model for the structured shape
+            // directly. The prompt lives in [`crate::summarize`] in this case
+            // rather than on a server we aren't talking to.
+            Backend::OpenRouter { .. } => Err(Error::NotImplemented("BYOK summaries")),
+            Backend::Cymose { .. } => self.post("/v1/code/summarize", req).await,
+        }
     }
 
+    /// Sends a session's outcome up to Cymose Web. Needs the Cymose backend by
+    /// definition — there is nothing to promote to without it.
     pub async fn promote(&self, body: &serde_json::Value) -> Result<serde_json::Value> {
         self.post("/v1/promote", body).await
     }
 
+    /// A call to the Cymose backend. Unreachable in 0.1 — every caller checks
+    /// the backend first — and kept because the routes it targets exist and
+    /// are what the web integration will use.
     async fn post<B: Serialize, R: for<'de> Deserialize<'de>>(
         &self,
         path: &str,
         body: &B,
     ) -> Result<R> {
-        let token = self.token.as_deref().ok_or(Error::NotAuthenticated)?;
+        let Backend::Cymose {
+            base_url,
+            token,
+            device_id,
+        } = &self.backend
+        else {
+            return Err(Error::NotImplemented("the Cymose backend"));
+        };
         let response = self
             .http
-            .post(format!("{}{path}", self.base_url))
+            .post(format!("{}{path}", base_url.trim_end_matches('/')))
             .bearer_auth(token)
-            .header("X-Cymose-Device", &self.device_id)
+            .header("X-Cymose-Device", device_id)
             .json(body)
             .send()
             .await?;
@@ -312,6 +422,101 @@ impl Client {
             Error::Refused(message) => Some(Decision::Refuse(message.clone())),
             _ => None,
         }
+    }
+}
+
+/// What one non-streamed turn produced.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InferenceResult {
+    pub content: String,
+    /// Tools the model wants run. The client runs them — see [`crate::agent`].
+    pub tool_calls: Vec<ToolCall>,
+    pub stop_reason: String,
+}
+
+/// One of our messages in OpenAI's shape.
+fn openai_message(message: &ApiMessage) -> serde_json::Value {
+    if message.role == "tool" {
+        return serde_json::json!({
+            "role": "tool",
+            "tool_call_id": message.tool_call_id,
+            "content": message.content.clone().unwrap_or_default(),
+        });
+    }
+    if !message.tool_calls.is_empty() {
+        return serde_json::json!({
+            "role": message.role,
+            "content": message.content,
+            "tool_calls": message.tool_calls.iter().map(|c| serde_json::json!({
+                "id": c.id,
+                "type": "function",
+                "function": { "name": c.name, "arguments": c.input.to_string() },
+            })).collect::<Vec<_>>(),
+        });
+    }
+    serde_json::json!({
+        "role": message.role,
+        "content": message.content.clone().unwrap_or_default(),
+    })
+}
+
+/// Reads a completion back out of OpenAI's shape.
+///
+/// Tolerant on purpose: a missing field yields an empty result rather than an
+/// error, because a turn that produced no text but did call a tool is normal,
+/// and so is the reverse.
+fn parse_openai_completion(value: &serde_json::Value) -> InferenceResult {
+    let choice = value.get("choices").and_then(|c| c.get(0));
+    let message = choice.and_then(|c| c.get("message"));
+
+    let tool_calls = message
+        .and_then(|m| m.get("tool_calls"))
+        .and_then(|t| t.as_array())
+        .map(|calls| {
+            calls
+                .iter()
+                .map(|call| {
+                    let function = call.get("function");
+                    let arguments = function
+                        .and_then(|f| f.get("arguments"))
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("{}");
+                    ToolCall {
+                        id: call
+                            .get("id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        name: function
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        // Arguments arrive as a JSON string. If the model
+                        // produced something unparsable, keep it verbatim
+                        // rather than dropping the call — the client can then
+                        // report what it actually got.
+                        input: serde_json::from_str(arguments).unwrap_or_else(
+                            |_| serde_json::json!({ "_malformed_arguments": arguments }),
+                        ),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    InferenceResult {
+        content: message
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        tool_calls,
+        stop_reason: choice
+            .and_then(|c| c.get("finish_reason"))
+            .and_then(|f| f.as_str())
+            .unwrap_or("stop")
+            .to_string(),
     }
 }
 
@@ -369,20 +574,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_client_without_a_token_refuses_before_it_dials() {
-        let client = Client::new("https://example.invalid", None, "device");
-        assert!(!client.is_authenticated());
+    fn a_client_without_a_key_refuses_before_it_dials() {
+        assert!(!Client::openrouter("").is_authenticated());
+        assert!(!Client::openrouter("   ").is_authenticated());
+        assert!(Client::openrouter("sk-or-v1-whatever").is_authenticated());
     }
 
-    #[test]
-    fn trailing_slashes_do_not_double_up_in_paths() {
-        let client = Client::new("https://example.invalid/", None, "device");
-        assert_eq!(client.base_url, "https://example.invalid");
+    #[tokio::test]
+    async fn the_cymose_backend_is_reported_as_unimplemented() {
+        // 0.1 is BYOK only. The routes exist server-side; nothing here talks
+        // to them yet, and pretending otherwise would fail at the first turn.
+        let client = Client::new(Backend::Cymose {
+            base_url: "https://example.invalid".into(),
+            token: "t".into(),
+            device_id: "device".into(),
+        });
+        let req = InferenceRequest {
+            session_id: "s".into(),
+            model: "claude-sonnet".into(),
+            messages: vec![ApiMessage::text("user", "hi")],
+            tools: vec![],
+            max_tokens: 128,
+            stream: false,
+        };
+        assert!(matches!(
+            client.inference(&req).await,
+            Err(Error::NotImplemented(_))
+        ));
     }
 
     #[tokio::test]
     async fn streaming_is_reported_as_unimplemented_not_silently_buffered() {
-        let client = Client::new("https://example.invalid", Some("t".into()), "device");
+        let client = Client::openrouter("sk-or-v1-whatever");
         let req = InferenceRequest {
             session_id: "s".into(),
             model: "claude-sonnet".into(),
@@ -515,6 +738,70 @@ mod tests {
         let (status, message) = parse_error_body(r#"{"error":"Profile not found"}"#);
         assert_eq!(status, None);
         assert_eq!(message, "Profile not found");
+    }
+
+    #[test]
+    fn tool_calls_translate_into_openai_shape_and_back() {
+        let call = ToolCall {
+            id: "call_1".into(),
+            name: "read_file".into(),
+            input: serde_json::json!({ "path": "src/lib.rs" }),
+        };
+        let assistant = ApiMessage {
+            role: "assistant".into(),
+            content: None,
+            tool_calls: vec![call.clone()],
+            tool_call_id: None,
+        };
+
+        // Out: `input` becomes a JSON *string* in `function.arguments`.
+        let wire = openai_message(&assistant);
+        assert_eq!(wire["tool_calls"][0]["type"], "function");
+        assert_eq!(wire["tool_calls"][0]["function"]["name"], "read_file");
+        assert_eq!(
+            wire["tool_calls"][0]["function"]["arguments"],
+            serde_json::json!(r#"{"path":"src/lib.rs"}"#)
+        );
+
+        // Back: the string is parsed into an object again.
+        let completion = serde_json::json!({
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "function": { "name": "read_file", "arguments": "{\"path\":\"src/lib.rs\"}" }
+                    }]
+                }
+            }]
+        });
+        let parsed = parse_openai_completion(&completion);
+        assert_eq!(parsed.tool_calls, vec![call]);
+        assert_eq!(parsed.stop_reason, "tool_calls");
+        assert_eq!(parsed.content, "");
+    }
+
+    #[test]
+    fn a_tool_result_message_carries_its_call_id() {
+        let wire = openai_message(&ApiMessage::tool_result("call_1", "fn main() {}"));
+        assert_eq!(wire["role"], "tool");
+        assert_eq!(wire["tool_call_id"], "call_1");
+        assert_eq!(wire["content"], "fn main() {}");
+    }
+
+    #[test]
+    fn malformed_tool_arguments_are_kept_rather_than_dropped() {
+        let completion = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "tool_calls": [{ "id": "c", "function": { "name": "search", "arguments": "{oops" } }]
+                }
+            }]
+        });
+        let parsed = parse_openai_completion(&completion);
+        assert_eq!(parsed.tool_calls.len(), 1);
+        assert_eq!(parsed.tool_calls[0].input["_malformed_arguments"], "{oops");
     }
 
     #[test]

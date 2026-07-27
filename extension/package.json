@@ -1,8 +1,8 @@
 {
 	"name": "cymose-code",
 	"displayName": "Cymose Code",
-	"description": "Sessions as a graph, models as a chain — the Cymose Code client for VS Code",
-	"version": "0.1.0",
+	"description": "0.1 beta · BYOK — sessions as a graph, models as a chain. The Cymose Code client for VS Code",
+	"version": "0.1.0-beta.1",
 	"publisher": "cymose",
 	"license": "Apache-2.0",
 	"repository": {

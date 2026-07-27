@@ -38,11 +38,16 @@ Nothing enforces this automatically. Check the diff before every commit —
 - `crates/cymose-cli` — the `cymose` binary: TUI, CLI subcommands, and
   `cymose sidecar` (JSON-RPC over stdio).
 - `extension/` — VS Code extension. Thin: UI, commands, and a client for the
-  sidecar. Logic that both clients need goes in `cymose-core`, not here.
+  sidecar. Logic that clients share goes in `cymose-core`, not here.
 
-The extension must not reimplement core behaviour. If the TUI and the
-extension would disagree about something, that something belongs behind the
-sidecar protocol ([docs/sidecar-protocol.md](docs/sidecar-protocol.md)).
+No client may reimplement core behaviour. If two of them would disagree about
+something, that something belongs behind the sidecar protocol
+([docs/sidecar-protocol.md](docs/sidecar-protocol.md)).
+
+0.1 is BYOK: turns go straight to OpenRouter on the user's key
+(`api::Backend::OpenRouter`). The Cymose backend exists and is switched off;
+don't wire client code to it without saying so in the README, which currently
+promises the opposite.
 
 ## Commands
 

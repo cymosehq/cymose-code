@@ -1,5 +1,11 @@
 # Cymose Code for VS Code
 
+> **0.1 beta.** Runs on your own [OpenRouter](https://openrouter.ai) key
+> (`OPENROUTER_API_KEY`) — there is no Cymose account and no billing in the
+> path of a turn. Integration with Cymose Web comes in a later milestone.
+> The code in this repository is written by an AI agent; see
+> [the note in the root README](../README.md#this-code-was-written-by-an-ai).
+
 The editor client. It does not implement the session graph, the model router,
 or the agent loop — it drives `cymose sidecar` over JSON-RPC, so it and the
 terminal client always agree.

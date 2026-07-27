@@ -10,10 +10,26 @@ Two clients, one core:
 - **Cymose Code for VS Code** — an extension that drives the same core as a
   sidecar process, so a session started in the terminal resumes in the editor
   and the other way round.
+The core is one Rust implementation. Every client is a thin layer over
+`cymose sidecar` speaking JSON-RPC, so none of them can quietly disagree about
+what a session is.
 
-> Status: **pre-alpha.** The workspace builds and the session store is real;
-> the agent loop and the model router are still being filled in. See
-> [Roadmap](#roadmap).
+## 0.1 beta — read this before you install
+
+**This is a 0.1 beta. It runs on your own OpenRouter key (BYOK) and nothing
+else.** There is no Cymose account, no billing, no server of ours in the path
+of a turn: your key goes to OpenRouter, and you see every cent of it on your
+own OpenRouter dashboard.
+
+What that means concretely:
+
+- **You need an [OpenRouter](https://openrouter.ai) key.** Put it in
+  `OPENROUTER_API_KEY`. Without one, nothing runs.
+- **Integration with [Cymose Web](https://cymose.dev) comes later.** The canvas
+  where the plan lives, `promote` back to a conclusion node, sync between
+  machines — that is the next milestone, and none of it is in this build. The
+  client already carries the backend it will use; it is switched off.
+- **Not everything works yet.** Honest inventory below.
 
 ## This code was written by an AI
 
@@ -74,13 +90,31 @@ summarize = "glm-4.5"      # routine work on a cheap model
 architect  = "claude-sonnet"
 ```
 
+### What works, and what doesn't
+
+| | |
+|---|---|
+| Session graph, summary inheritance, SQLite store | **works** |
+| TUI: tree, session detail, creating sessions | **works** |
+| Tools — read, write, search, run (path jail, command allowlist) | **works** |
+| Model chain and failover policy | **works** |
+| One turn, BYOK, non-streamed | **works** |
+| Streaming turns | not yet |
+| The agent loop end to end (`cymose new` runs a task by itself) | **not yet** |
+| `diff`, `promote`, VS Code panel actions | not yet |
+| Cymose Web sync | later milestone |
+
+If you install this expecting to hand it a task and walk away, you will be
+disappointed today. If you want to look at how a session graph is built and
+tell us where it's wrong, now is a good time.
+
 ## Install
 
 Nothing is published yet. From source:
 
 ```sh
+export OPENROUTER_API_KEY=sk-or-v1-...
 cargo install --path crates/cymose-cli
-cymose login
 cymose init            # link this directory to a workspace
 cymose                 # open the TUI
 ```
@@ -94,7 +128,7 @@ cymose new --from <id> "..."   start one that inherits a specific session
 cymose resume <id>             continue a session
 cymose list                    show the session tree
 cymose diff <id> <id>          compare two approaches
-cymose promote <id>            send the outcome to Cymose Web
+cymose promote <id>            send the outcome to Cymose Web (later milestone)
 cymose sidecar                 JSON-RPC over stdio (used by the extension)
 ```
 
@@ -112,18 +146,20 @@ branches, conclusions. Cymose Code is where those turn into diffs. Mark a node
 as a code task and it opens as a session here; `promote` sends the result back
 as a conclusion node. Plan on one screen, implementation on the other.
 
-Cymose Code needs a Cymose account today: the model calls go through the Cymose
-API. Bring-your-own-key, which removes that dependency, is on the roadmap.
+None of that is in 0.1. Today the two are separate products: Cymose Code runs
+on your own key, locally, and knows nothing about the web canvas. Linking them
+— a canvas node that opens as a coding session, and `promote` sending the diff
+back as a conclusion — is the next milestone.
 
 ## Roadmap
 
 | Version | Scope |
 |---------|-------|
-| v0.1 | Terminal: session store, TUI, agent loop (read/write/run/search), router with fallback, context inheritance, summariser |
+| **v0.1 beta (here)** | BYOK only. Session store, TUI, tools, router, context inheritance. Agent loop and streaming still landing |
 | v0.2 | VS Code: session tree, agent panel, native diff, sidecar transport, CodeLens |
 | v0.3 | Sync: Web ↔ Terminal ↔ VS Code, promote from both clients, `explore` visible everywhere |
 | v0.4 | Code graph via tree-sitter: symbols and call/import edges feeding the context builder |
-| later | BYOK — talk to providers directly, no Cymose account |
+| v0.5 | Cymose Web sync from every client, `explore` visible everywhere |
 
 ## Contributing
 

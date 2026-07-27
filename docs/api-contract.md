@@ -1,4 +1,18 @@
-# Cymose API — the part this client depends on
+# Backends
+
+## 0.1 talks to OpenRouter, not to us
+
+The 0.1 beta is BYOK: `api::Backend::OpenRouter` sends an OpenAI-compatible
+chat completion straight to `openrouter.ai` with the user's own key. Nothing of
+ours is in the path of a turn — no account, no metering, no service to be down
+— and the translation between this crate's wire format and OpenAI's lives in
+`api::openai_message` / `api::parse_openai_completion`.
+
+The rest of this document describes the **Cymose backend**: implemented on the
+API, not switched on here, and what the Cymose Web integration will run on.
+`api::Backend::Cymose` returns `Error::NotImplemented` in this build.
+
+## The Cymose backend (later milestone)
 
 The server is proprietary and lives in a separate repository. What follows is
 the wire contract only: what this client sends and what it expects back. How

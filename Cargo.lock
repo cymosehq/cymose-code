@@ -325,7 +325,7 @@ dependencies = [
 
 [[package]]
 name = "cymose-cli"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -340,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "cymose-core"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "anyhow",
  "chrono",

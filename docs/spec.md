@@ -142,9 +142,15 @@ Three questions that were open at the start of the project and are now settled:
   clients eventually disagree about something subtle.
 - **Apache-2.0.** Patent grant, and an explicit position on the project name
   (see [NOTICE](../NOTICE)).
-- **Cloud first, BYOK later.** The MVP authenticates against a Cymose account
-  and model calls go through the Cymose API. Talking to providers directly is a
-  later feature, not the starting point.
+- **BYOK first, cloud later — reversed.** This started as "cloud first": an
+  account, and turns through the Cymose API. Two things changed it. A coding
+  agent burns an order of magnitude more per session than a chat turn, so a
+  free tier funded out of one shared balance would last days, not months. And a
+  beta that needs an account, a payment rail and a working backend has three
+  ways to fail before anyone sees the product. 0.1 is BYOK only: the user's own
+  OpenRouter key, straight to OpenRouter. The Cymose backend is built (the API
+  serves `/v1/code/*`) and switched off here; it is what the web integration
+  will run on.
 
 ## 8. Still open
 
@@ -156,5 +162,9 @@ Three questions that were open at the start of the project and are now settled:
   awkward for running three agents in one working directory) versus file
   snapshots in the store (easy to parallelise, needs its own diff plumbing).
   Leaning towards snapshots with an opt-in export to branches.
-- **Offline behaviour.** With cloud-only inference, what a session does when the
-  network is down: refuse, queue, or degrade.
+- **Offline behaviour.** What a session does when the network is down: refuse,
+  queue, or degrade.
+- **Where the summariser's prompt lives under BYOK.** With the Cymose backend
+  the server owns it, which is how it improves without a client release. On a
+  user's own key there is no server in the path, so the client has to carry a
+  prompt — and then two implementations can disagree about what a summary is.
