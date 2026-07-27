@@ -2,7 +2,7 @@
 
 An agentic coding tool that treats work as a **graph of short sessions** instead
 of one endless chat, and routes across **several models** so a single provider's
-rate limit doesn't stop your day.
+rate limit doesn't stop your day. — [cymose.dev/code](https://cymose.dev/code)
 
 Two clients, one core:
 
