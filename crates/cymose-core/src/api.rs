@@ -224,6 +224,77 @@ impl SessionSummary {
 /// The Cymose backend is the later half: it exists (see the API's
 /// `/v1/code/*`) and is what Cymose Web syncs through, but it is not wired up
 /// here yet and nothing in this build depends on it.
+/// Tree format this build speaks. Sent by the server as `version`.
+pub const SYNC_VERSION: u32 = 1;
+
+/// One node of the Web tree, as `GET /v1/sync/tree` returns it.
+///
+/// Structure and summaries only — no message bodies, no note bodies. A client
+/// draws the tree from this and fetches the transcript for the one node the
+/// user actually opened; returning everything would grow without bound for
+/// exactly the accounts that sync the most.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct SyncNode {
+    pub id: String,
+    /// `None` is a root node.
+    pub parent_id: Option<String>,
+    pub title: String,
+    /// Context frozen from the ancestors at the moment this branch was made.
+    pub inherited_summary: Option<String>,
+    /// Conclusions promoted up from this node's own branches.
+    pub promoted_digest: Option<String>,
+    #[serde(default)]
+    pub pinned: bool,
+    /// `None` means the node has never been dragged on the Web canvas, and a
+    /// client is free to lay it out however it likes.
+    #[serde(default)]
+    pub position: Option<SyncPosition>,
+    #[serde(default)]
+    pub notes: Vec<SyncNote>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+pub struct SyncPosition {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// A notebook pinned to a node. Title only — see [`SyncNode`].
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct SyncNote {
+    pub id: String,
+    pub title: String,
+    /// Whether the Web reads this note into the model's context.
+    #[serde(default)]
+    pub in_context: bool,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct SyncTree {
+    pub version: u32,
+    /// Advisory in v1. Returned from the first version so clients can start
+    /// recording it, because the write direction will need it.
+    #[serde(default)]
+    pub synced_at: Option<String>,
+    pub nodes: Vec<SyncNode>,
+}
+
+impl SyncTree {
+    /// Root nodes, in the order the server sent them.
+    pub fn roots(&self) -> impl Iterator<Item = &SyncNode> {
+        self.nodes.iter().filter(|n| n.parent_id.is_none())
+    }
+
+    /// Direct children of a node.
+    pub fn children_of<'a>(&'a self, id: &'a str) -> impl Iterator<Item = &'a SyncNode> {
+        self.nodes
+            .iter()
+            .filter(move |n| n.parent_id.as_deref() == Some(id))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Backend {
     OpenRouter {
@@ -362,6 +433,73 @@ impl Client {
     /// definition — there is nothing to promote to without it.
     pub async fn promote(&self, body: &serde_json::Value) -> Result<serde_json::Value> {
         self.post("/v1/promote", body).await
+    }
+
+    /// The account's Web tree, read into whatever this client stores.
+    ///
+    /// Read-only on purpose. Pull before push: an export has no conflict
+    /// resolution to get wrong, and reading the Web tree is most of what
+    /// synchronisation is for from here — you planned it in the browser and
+    /// the session opens against the node you planned. Writing back needs
+    /// revisions, tombstones and merge rules, and those should not be designed
+    /// after the easy half has already shipped.
+    ///
+    /// Unreachable in 0.1 for the same reason [`Client::promote`] is: this
+    /// needs an account, and 0.1 sends every turn straight to OpenRouter on
+    /// the user's own key. The route exists on the API and the shape is pinned
+    /// down here so the client half is a wiring job rather than a design one.
+    pub async fn sync_tree(&self) -> Result<SyncTree> {
+        let tree: SyncTree = self.get("/v1/sync/tree").await?;
+        // Three clients read this route on three release schedules. A build
+        // that meets a version it does not know must say so rather than guess
+        // at a tree — a mis-parsed parent pointer is a reparented branch, and
+        // the user would find out by seeing their work in the wrong place.
+        if tree.version != SYNC_VERSION {
+            return Err(Error::Upstream {
+                status: 505,
+                message: format!(
+                    "this build speaks tree format v{SYNC_VERSION}, the server sent v{} — update Cymose",
+                    tree.version
+                ),
+            });
+        }
+        Ok(tree)
+    }
+
+    /// A read from the Cymose backend. The GET twin of [`Client::post`];
+    /// unreachable in 0.1 for the same reason.
+    async fn get<R: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<R> {
+        let Backend::Cymose {
+            base_url,
+            token,
+            device_id,
+        } = &self.backend
+        else {
+            return Err(Error::NotImplemented("the Cymose backend"));
+        };
+        let response = self
+            .http
+            .get(format!("{}{path}", base_url.trim_end_matches('/')))
+            .bearer_auth(token)
+            .header("X-Cymose-Device", device_id)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response.json::<R>().await?);
+        }
+
+        let text = response.text().await.unwrap_or_default();
+        let (provider_status, message) = parse_error_body(&text);
+        Err(match provider_status.unwrap_or(status.as_u16()) {
+            401 => Error::NotAuthenticated,
+            402 | 403 | 451 => Error::Refused(message),
+            other => Error::Upstream {
+                status: other,
+                message,
+            },
+        })
     }
 
     /// A call to the Cymose backend. Unreachable in 0.1 — every caller checks
@@ -578,6 +716,84 @@ mod tests {
         assert!(!Client::openrouter("").is_authenticated());
         assert!(!Client::openrouter("   ").is_authenticated());
         assert!(Client::openrouter("sk-or-v1-whatever").is_authenticated());
+    }
+
+    #[test]
+    fn a_tree_export_parses_into_a_navigable_graph() {
+        // The documented v1 shape, verbatim from docs/api-contract.md. The
+        // point of pinning it in a test is that three clients read this route
+        // and the contract is the only thing keeping them agreeing.
+        let body = r#"{
+            "version": 1,
+            "synced_at": "2026-07-29T02:14:00.000Z",
+            "nodes": [
+                {
+                    "id": "root",
+                    "parent_id": null,
+                    "title": "rate limiting",
+                    "inherited_summary": null,
+                    "promoted_digest": "sliding window won",
+                    "pinned": true,
+                    "position": { "x": 120.0, "y": 40.0 },
+                    "notes": [
+                        { "id": "n1", "title": "wire protocol", "in_context": true, "updated_at": "t" }
+                    ],
+                    "created_at": "t"
+                },
+                {
+                    "id": "child",
+                    "parent_id": "root",
+                    "title": "token bucket",
+                    "inherited_summary": "the parent is about rate limiting",
+                    "promoted_digest": null,
+                    "pinned": false,
+                    "position": null,
+                    "notes": [],
+                    "created_at": "t"
+                }
+            ]
+        }"#;
+
+        let tree: SyncTree = serde_json::from_str(body).expect("v1 export should parse");
+        assert_eq!(tree.version, SYNC_VERSION);
+        assert_eq!(tree.nodes.len(), 2);
+
+        let roots: Vec<_> = tree.roots().collect();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].id, "root");
+        assert_eq!(roots[0].notes[0].title, "wire protocol");
+        assert_eq!(roots[0].position, Some(SyncPosition { x: 120.0, y: 40.0 }));
+
+        let children: Vec<_> = tree.children_of("root").collect();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].title, "token bucket");
+        // Never dragged on the canvas — the client lays this one out itself.
+        assert!(children[0].position.is_none());
+    }
+
+    #[test]
+    fn a_node_with_no_notes_key_still_parses() {
+        // Older servers, and any future response that omits an empty list. A
+        // missing notes array must mean "no notes", not a parse failure that
+        // loses the whole tree.
+        let node: SyncNode = serde_json::from_str(
+            r#"{"id":"a","parent_id":null,"title":"t","inherited_summary":null,
+                "promoted_digest":null,"created_at":"t"}"#,
+        )
+        .expect("optional fields should default");
+        assert!(node.notes.is_empty());
+        assert!(!node.pinned);
+        assert!(node.position.is_none());
+    }
+
+    #[tokio::test]
+    async fn syncing_without_the_cymose_backend_is_unimplemented() {
+        // Same status as promote: the route exists, 0.1 does not dial it.
+        let client = Client::openrouter("sk-or-v1-whatever");
+        assert!(matches!(
+            client.sync_tree().await,
+            Err(Error::NotImplemented("the Cymose backend"))
+        ));
     }
 
     #[tokio::test]
