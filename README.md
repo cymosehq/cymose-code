@@ -110,14 +110,43 @@ tell us where it's wrong, now is a good time.
 
 ## Install
 
-Nothing is published yet. From source:
+**Terminal — one line, no toolchain:**
+
+```sh
+curl -fsSL https://cymose.dev/install.sh | sh
+```
+
+It downloads the release binary for your platform, checks it against the
+published `SHA256SUMS`, and puts it in `~/.local/bin` (override with
+`CYMOSE_INSTALL_DIR`). Windows PowerShell:
+
+```powershell
+irm https://cymose.dev/install.ps1 | iex
+```
+
+Then:
 
 ```sh
 export OPENROUTER_API_KEY=sk-or-v1-...
-cargo install --path crates/cymose-cli
 cymose init            # link this directory to a workspace
 cymose                 # open the TUI
 ```
+
+**VS Code:** search for **Cymose Code** in the Extensions view (`Ctrl`/`Cmd` +
+`Shift` + `X`) and install it — the extension bundles the core binary, so
+there is nothing else to set up. Not published yet: until it is, grab the
+`.vsix` from [Releases](https://github.com/cymosehq/cymose-code/releases) and
+run **Extensions: Install from VSIX…** from the command palette.
+
+**From source**, if you'd rather build it:
+
+```sh
+git clone https://github.com/cymosehq/cymose-code
+cd cymose-code
+cargo install --path crates/cymose-cli
+```
+
+Releasing, and how the Marketplace publish works: [RELEASING.md](RELEASING.md).
 
 ## CLI
 
