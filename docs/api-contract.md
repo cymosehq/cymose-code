@@ -66,6 +66,7 @@ written to the session store, and never included in a bug report — see
 | `POST /v1/code/inference` | every agent turn | SSE stream |
 | `POST /v1/code/summarize` | the summariser, when a session ends | synchronous JSON |
 | `POST /v1/promote` | `cymose promote` — outcome to a Web conclusion node | synchronous JSON |
+| `GET /v1/sync/tree` | reading the Web tree into a local store | synchronous JSON |
 
 `/v1/code/*` is implemented on the API and not yet deployed. Both routes accept
 `stream: false` and answer with one JSON body — which is what
@@ -194,3 +195,54 @@ Either way the client reads `provider_status` and acts on it:
 
 `402`, `403` and `451` messages are shown as sent. The client does not
 paraphrase them and must not try to reconstruct why the server said no.
+
+### `GET /v1/sync/tree`
+
+The account's whole tree, in the shape every client is expected to store it in.
+No body; the bearer token identifies the caller and the server returns only
+that caller's nodes.
+
+```jsonc
+{
+  "version": 1,
+  "synced_at": "2026-07-29T02:14:00.000Z",
+  "nodes": [
+    {
+      "id": "uuid",
+      "parent_id": null,             // null = a root node
+      "title": "rate limiting",
+      "inherited_summary": "…",      // context frozen from ancestors at branch time
+      "promoted_digest": "…",        // conclusions promoted up from this node's branches
+      "pinned": false,
+      "position": { "x": 120, "y": 40 },   // null = never dragged; lay it out yourself
+      "notes": [
+        { "id": "uuid", "title": "wire protocol", "in_context": true, "updated_at": "…" }
+      ],
+      "created_at": "…"
+    }
+  ]
+}
+```
+
+Read-only, and only structure: titles, summaries, note titles. **No message
+bodies and no note bodies.** A client draws the tree from this response and
+fetches the transcript for the one node the user actually opened — returning
+every message would grow the payload without bound for exactly the accounts
+that sync the most.
+
+`version` is checked before parsing. Three clients read this route on three
+release schedules, so a client that meets a version it doesn't know must say so
+rather than guess at a tree.
+
+`synced_at` is advisory today. It is returned from the first version so clients
+can start recording it, because the write direction will need it.
+
+There is no write direction yet, deliberately: pull before push. An export has
+no conflict resolution to get wrong, and reading the Web tree into a local
+store is most of what synchronisation is for. Writing back needs revisions,
+tombstones and merge rules, and designing those under the pressure of having
+already shipped the easy half is how a sync protocol goes bad.
+
+This route needs a Cymose account. It is not part of a turn: 0.1 sends
+inference straight to OpenRouter on the user's own key regardless of whether
+anything here is ever called.
