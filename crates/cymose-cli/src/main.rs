@@ -104,7 +104,15 @@ async fn run(command: Command, store_path: &std::path::Path) -> Result<()> {
 
             let inherited = ContextBuilder::new(&store).build(&session.id)?;
             if inherited.is_empty() {
-                println!("(nothing inherited — this is a root session)");
+                // Two different situations, and calling both "a root session"
+                // tells someone who just branched that their branch didn't
+                // take. It did — its parent simply hasn't been summarised yet,
+                // because nothing has run in it.
+                if session.parent_id.is_some() {
+                    println!("(nothing to inherit yet — the parent has no summary until a session there finishes)");
+                } else {
+                    println!("(nothing inherited — this is a root session)");
+                }
             } else {
                 println!("\ninherits {} session(s):", inherited.items.len());
                 for item in &inherited.items {

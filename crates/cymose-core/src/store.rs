@@ -194,15 +194,20 @@ impl Store {
         title: &str,
         parent_id: Option<&str>,
     ) -> Result<Session> {
-        if let Some(parent) = parent_id {
-            // Fail before inserting: a session whose parent doesn't exist would
-            // silently inherit nothing, which looks like a bad summariser.
-            self.session(parent)?;
-        }
+        // Resolve before inserting, for two reasons. A session whose parent
+        // doesn't exist would silently inherit nothing, which looks like a bad
+        // summariser rather than a bad id. And `parent_id` may be a short id
+        // pasted out of a listing — storing that verbatim writes a foreign key
+        // that points at nothing, which the database catches and the user
+        // cannot act on.
+        let parent_id = match parent_id {
+            Some(parent) => Some(self.session(parent)?.id),
+            None => None,
+        };
         let session = Session {
             id: Uuid::new_v4().to_string(),
             workspace_id: workspace_id.to_string(),
-            parent_id: parent_id.map(str::to_string),
+            parent_id,
             title: title.to_string(),
             status: SessionStatus::Pending,
             model: None,
@@ -225,8 +230,20 @@ impl Store {
         Ok(session)
     }
 
+    /// A session by id, or by any unambiguous prefix of one.
+    ///
+    /// Prefixes because every list this program prints shows a short id — a
+    /// full uuid four times over is a wall, not a list — and an id you cannot
+    /// paste back into the next command is a decoration. Git set this
+    /// expectation and everyone has it.
+    ///
+    /// Exact match is tried first, so a full id never pays for the scan and can
+    /// never be ambiguous. A prefix matching two sessions is an error rather
+    /// than a guess: picking one would silently branch from the wrong place,
+    /// and the whole point of this tool is that branches inherit.
     pub fn session(&self, id: &str) -> Result<Session> {
-        self.conn
+        if let Some(session) = self
+            .conn
             .query_row(
                 "SELECT id, workspace_id, parent_id, title, status, model, web_node_id, created_at, ended_at
                  FROM sessions WHERE id = ?1",
@@ -234,7 +251,23 @@ impl Store {
                 row_to_session,
             )
             .optional()?
-            .ok_or_else(|| Error::SessionNotFound(id.to_string()))
+        {
+            return Ok(session);
+        }
+
+        // Two rows are enough to know it's ambiguous; no reason to read more.
+        let mut stmt = self.conn.prepare(
+            "SELECT id, workspace_id, parent_id, title, status, model, web_node_id, created_at, ended_at
+             FROM sessions WHERE id LIKE ?1 || '%' LIMIT 2",
+        )?;
+        let mut matches = stmt
+            .query_map(params![id], row_to_session)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        match matches.len() {
+            1 => Ok(matches.remove(0)),
+            0 => Err(Error::SessionNotFound(id.to_string())),
+            _ => Err(Error::AmbiguousSession(id.to_string())),
+        }
     }
 
     pub fn set_status(&self, id: &str, status: SessionStatus) -> Result<()> {
@@ -461,6 +494,57 @@ mod tests {
         let ws = s.ensure_workspace(Path::new("/tmp/proj"), "proj").unwrap();
         let err = s.create_session(&ws, "orphan", Some("nope")).unwrap_err();
         assert!(matches!(err, Error::SessionNotFound(_)));
+    }
+
+    #[test]
+    fn a_short_id_from_a_listing_resolves_back_to_its_session() {
+        // The bug this exists for: every listing prints an 8-character id, and
+        // pasting one into `--from` used to say "not found".
+        let s = Store::open_in_memory().unwrap();
+        let ws = s.ensure_workspace(Path::new("/tmp/p"), "p").unwrap();
+        let session = s.create_session(&ws, "rate limiting", None).unwrap();
+
+        let short = &session.id[..8];
+        assert_eq!(s.session(short).unwrap().id, session.id);
+        // A full id still works, and takes the exact path.
+        assert_eq!(s.session(&session.id).unwrap().id, session.id);
+        assert!(matches!(
+            s.session("zzzzzzzz").unwrap_err(),
+            Error::SessionNotFound(_)
+        ));
+    }
+
+    #[test]
+    fn branching_from_a_short_id_stores_the_full_one() {
+        // The follow-on bug: resolution succeeded and then the prefix itself
+        // was written as parent_id, so the insert failed on the foreign key —
+        // with a message about constraints that tells the user nothing.
+        let s = Store::open_in_memory().unwrap();
+        let ws = s.ensure_workspace(Path::new("/tmp/p"), "p").unwrap();
+        let root = s.create_session(&ws, "rate limiting", None).unwrap();
+
+        let child = s
+            .create_session(&ws, "token bucket", Some(&root.id[..8]))
+            .unwrap();
+        assert_eq!(child.parent_id.as_deref(), Some(root.id.as_str()));
+        // And the tree agrees, which is what the context builder walks.
+        assert_eq!(s.ancestors(&child.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_ambiguous_prefix_is_an_error_rather_than_a_guess() {
+        // Branching from the wrong parent inherits the wrong context, and the
+        // user would have no reason to suspect it.
+        let s = Store::open_in_memory().unwrap();
+        let ws = s.ensure_workspace(Path::new("/tmp/p"), "p").unwrap();
+        s.create_session(&ws, "a", None).unwrap();
+        s.create_session(&ws, "b", None).unwrap();
+        // Every uuid here starts with a hex digit, so the empty-ish prefix that
+        // matches everything is the shared one: "".
+        assert!(matches!(
+            s.session("").unwrap_err(),
+            Error::AmbiguousSession(_)
+        ));
     }
 
     #[test]

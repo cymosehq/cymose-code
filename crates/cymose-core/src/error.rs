@@ -10,6 +10,11 @@ pub enum Error {
     #[error("session {0} not found")]
     SessionNotFound(String),
 
+    /// A short id that matches more than one session. Guessing would branch
+    /// from the wrong place, and inheritance is the whole point.
+    #[error("session id {0} matches more than one session — use more characters")]
+    AmbiguousSession(String),
+
     #[error("not authenticated — run `cymose login`")]
     NotAuthenticated,
 
