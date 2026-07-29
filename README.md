@@ -16,19 +16,24 @@ what a session is.
 
 ## 0.1 beta — read this before you install
 
-**This is a 0.1 beta. It runs on your own OpenRouter key (BYOK) and nothing
-else.** There is no Cymose account, no billing, no server of ours in the path
-of a turn: your key goes to OpenRouter, and you see every cent of it on your
-own OpenRouter dashboard.
+**This is a 0.1 beta. Turns run on your own OpenRouter key (BYOK) and nothing
+else.** There is no billing and no server of ours in the path of a turn: your
+key goes to OpenRouter, and you see every cent of it on your own OpenRouter
+dashboard. No account is required to use any of it.
 
 What that means concretely:
 
 - **You need an [OpenRouter](https://openrouter.ai) key.** Put it in
   `OPENROUTER_API_KEY`. Without one, nothing runs.
-- **Integration with [Cymose Web](https://cymose.dev) comes later.** The canvas
-  where the plan lives, `promote` back to a conclusion node, sync between
-  machines — that is the next milestone, and none of it is in this build. The
-  client already carries the backend it will use; it is switched off.
+- **[Cymose Web](https://cymose.dev) integration reads only, and is optional.**
+  `cymose sync` prints the tree you planned in the browser — titles, promoted
+  conclusions, pinned notes. It is the one thing here that talks to a server of
+  ours, it does nothing until you put a token in `config.toml`, and it never
+  writes anything back. Turns still go straight to OpenRouter on your own key
+  whether or not you ever set it.
+- **`promote` back to a conclusion node, and syncing sessions between machines,
+  come later.** The write direction needs revisions and merge rules; reading is
+  most of the value and has none of that risk.
 - **Not everything works yet.** Honest inventory below.
 
 ## This code was written by an AI
@@ -99,6 +104,7 @@ architect  = "claude-sonnet"
 | Tools — read, write, search, run (path jail, command allowlist) | **works** |
 | Model chain and failover policy | **works** |
 | One turn, BYOK, non-streamed | **works** |
+| `cymose sync` — read the Web tree | **works** (needs a token; read-only) |
 | Streaming turns | not yet |
 | The agent loop end to end (`cymose new` runs a task by itself) | **not yet** |
 | `diff`, `promote`, VS Code panel actions | not yet |

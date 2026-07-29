@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use cymose_core::api::{Backend, Client};
 use cymose_core::context::ContextBuilder;
 use cymose_core::{Config, Store};
 
@@ -49,6 +50,8 @@ enum Command {
     Diff { a: String, b: String },
     /// Send a session's outcome to Cymose Web
     Promote { id: String },
+    /// Read the tree you planned in Cymose Web
+    Sync,
     /// Serve JSON-RPC over stdio (used by the VS Code extension)
     Sidecar,
 }
@@ -156,6 +159,42 @@ async fn run(command: Command, store_path: &std::path::Path) -> Result<()> {
             );
         }
 
+        Command::Sync => {
+            let config = Config::load(Some(&root))?;
+            let Some(token) = config.api.token.filter(|t| !t.trim().is_empty()) else {
+                anyhow::bail!(
+                    "no Cymose token configured.\n\n\
+                     `cymose sync` reads the tree you planned in Cymose Web, which needs an \
+                     account. Everything else in this build works without one.\n\n\
+                     Put your token in {}:\n\n    [api]\n    token = \"...\"\n",
+                    Config::config_dir()?.join("config.toml").display()
+                );
+            };
+
+            // Read-only. Pull before push: nothing here writes back, so there
+            // is no conflict resolution to get wrong, and the direction that
+            // hurts every day — planning in the browser and rebuilding the
+            // context here by hand — is the one this fixes.
+            let client = Client::new(Backend::Cymose {
+                base_url: config.api.base_url.clone(),
+                token,
+                // Device identity exists for per-device rate limiting on the
+                // metered routes. Reading your own tree is neither metered nor
+                // per-device, so a constant is honest here.
+                device_id: "cymose-cli".into(),
+            });
+            let tree = client.sync_tree().await?;
+            if tree.nodes.is_empty() {
+                println!("nothing on the web yet.");
+            } else {
+                print_web_tree(&tree, None, 0);
+                println!(
+                    "\n{} node(s). Read-only — nothing here is written back.",
+                    tree.nodes.len()
+                );
+            }
+        }
+
         Command::Sidecar => unreachable!("handled in main"),
     }
     Ok(())
@@ -165,6 +204,41 @@ fn workspace(store: &Store, root: &std::path::Path) -> Result<String> {
     store
         .workspace_for_path(root)?
         .context("this directory is not linked to a workspace — run `cymose init`")
+}
+
+/// The Web tree, same shape as the local one so the two read alike. Deliberately
+/// prints what a node *decided* — its promoted conclusion and the notes pinned
+/// to it — rather than its transcript, which the export does not carry.
+fn print_web_tree(tree: &cymose_core::api::SyncTree, parent: Option<&str>, depth: usize) {
+    for node in tree
+        .nodes
+        .iter()
+        .filter(|n| n.parent_id.as_deref() == parent)
+    {
+        let short = &node.id[..node.id.len().min(8)];
+        println!(
+            "{:indent$}• {} — {short}",
+            "",
+            node.title,
+            indent = depth * 2
+        );
+        if let Some(digest) = node.promoted_digest.as_deref().map(str::trim) {
+            if !digest.is_empty() {
+                let line = digest.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+                println!("{:indent$}  ↑ {line}", "", indent = depth * 2);
+            }
+        }
+        for note in &node.notes {
+            let state = if note.in_context { "" } else { " (off)" };
+            println!(
+                "{:indent$}  ▤ {}{state}",
+                "",
+                note.title,
+                indent = depth * 2
+            );
+        }
+        print_web_tree(tree, Some(&node.id), depth + 1);
+    }
 }
 
 /// Roots first, then their children beneath them. The tree is small enough

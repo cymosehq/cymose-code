@@ -24,12 +24,21 @@ pub struct ApiConfig {
     /// Configuration, not a constant, so a contributor can point at a local
     /// server without patching the binary.
     pub base_url: String,
+    /// Cymose account token, used only to read your Web tree (`cymose sync`).
+    ///
+    /// Optional, and absent by default. 0.1 needs no account: turns go straight
+    /// to OpenRouter on your own key whether or not this is ever set. Setting
+    /// it buys exactly one thing — seeing the tree you planned in the browser
+    /// from the terminal.
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
 impl Default for ApiConfig {
     fn default() -> Self {
         ApiConfig {
             base_url: "https://api.cymose.cloud".into(),
+            token: None,
         }
     }
 }
@@ -81,6 +90,9 @@ mod tests {
     fn defaults_are_a_usable_configuration() {
         let c = Config::default();
         assert!(c.api.base_url.starts_with("https://"));
+        // No account by default. 0.1 is BYOK, and a default token would mean
+        // the binary talks to us before anyone asked it to.
+        assert!(c.api.token.is_none());
         assert_eq!(c.router.chain.first().unwrap(), "claude-sonnet");
     }
 
