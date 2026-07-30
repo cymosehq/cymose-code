@@ -10,6 +10,7 @@ description = "Session graph, model router and agent loop shared by the Cymose C
 [dependencies]
 anyhow = "1.0.104"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "serde"] }
+futures-util = { version = "0.3.33", default-features = false, features = ["std"] }
 reqwest = { version = "0.13.3", default-features = false, features = ["json", "stream", "rustls"] }
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }

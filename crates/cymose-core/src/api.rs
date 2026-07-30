@@ -113,6 +113,91 @@ pub enum StreamEvent {
     Unknown,
 }
 
+/// Pulls complete SSE frames out of a buffer, leaving any partial one behind.
+///
+/// The thing this exists for: a frame is delimited by a blank line, and the
+/// network has no idea about that. A 4KB read can end mid-JSON, and the next
+/// one carries the rest. Parsing whatever arrived and hoping is how streams
+/// drop tokens under load and nowhere else — it works perfectly on a fast
+/// local connection and corrupts one message in fifty over a bad hotel wifi.
+///
+/// Returns the frames it could complete; `buffer` keeps the remainder.
+fn drain_sse_frames(buffer: &mut String) -> Vec<(String, String)> {
+    let mut frames = Vec::new();
+    // Servers disagree about line endings, and a stream that works on one and
+    // not the other is a bug nobody can reproduce.
+    let normalised = buffer.replace("\r\n", "\n");
+    *buffer = normalised;
+
+    while let Some(end) = buffer.find("\n\n") {
+        let raw: String = buffer.drain(..end + 2).collect();
+        let mut event = String::new();
+        let mut data = String::new();
+        for line in raw.lines() {
+            if let Some(rest) = line.strip_prefix("event:") {
+                event = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("data:") {
+                // Multiple data: lines in one frame concatenate, per the spec.
+                if !data.is_empty() {
+                    data.push('\n');
+                }
+                data.push_str(rest.trim_start());
+            }
+            // Comments (": keep-alive") and unknown fields are ignored, which
+            // is what keeps a proxy's heartbeat from looking like an event.
+        }
+        if !data.is_empty() {
+            frames.push((event, data));
+        }
+    }
+    frames
+}
+
+/// One chunk of an OpenAI-style stream, translated into our own event.
+///
+/// BYOK talks to OpenRouter directly, and OpenRouter speaks OpenAI's format:
+/// no `event:` line, deltas under `choices[0].delta`, and a `[DONE]` sentinel
+/// instead of a terminating event. Translating here rather than teaching the
+/// rest of the crate two formats is the same call `openai_message` already
+/// makes for the non-streaming path.
+fn parse_openai_chunk(data: &str) -> Option<StreamEvent> {
+    if data.trim() == "[DONE]" {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(data).ok()?;
+    let choice = value.get("choices")?.get(0)?;
+
+    if let Some(delta) = choice
+        .get("delta")
+        .and_then(|d| d.get("content"))
+        .and_then(|c| c.as_str())
+    {
+        if !delta.is_empty() {
+            return Some(StreamEvent::TextDelta {
+                delta: delta.to_string(),
+            });
+        }
+    }
+
+    if let Some(reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
+        return Some(StreamEvent::Done {
+            stop_reason: reason.to_string(),
+            tokens_used: value
+                .get("usage")
+                .and_then(|u| serde_json::from_value(u.clone()).ok())
+                .unwrap_or_default(),
+            model: value
+                .get("model")
+                .and_then(|m| m.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        });
+    }
+
+    // A keep-alive chunk, or a role-only first delta. Neither is an event.
+    None
+}
+
 /// Parses one `event:`/`data:` pair from the stream.
 ///
 /// Split out from the transport so the event shapes can be tested without a
@@ -381,20 +466,116 @@ impl Client {
         }
     }
 
-    /// One agent turn.
+    /// One agent turn, buffered.
     ///
-    /// Streaming is not wired up yet, so asking for a stream fails loudly
-    /// rather than silently buffering — which would look like the model
-    /// hanging. The event shapes it will produce are already pinned down in
-    /// [`parse_stream_event`].
+    /// For callers that want the finished result and nothing in between —
+    /// scripts, the summariser, tests. Anything with a person watching should
+    /// use [`Client::inference_stream`], which is the same turn delivered as
+    /// it happens.
     pub async fn inference(&self, req: &InferenceRequest) -> Result<InferenceResult> {
         if req.stream {
-            return Err(Error::NotImplemented("streaming inference"));
+            return Err(Error::NotImplemented(
+                "buffered inference with stream: true — call inference_stream",
+            ));
         }
         match &self.backend {
             Backend::OpenRouter { api_key } => self.openrouter_inference(req, api_key).await,
             Backend::Cymose { .. } => Err(Error::NotImplemented("the Cymose backend")),
         }
+    }
+
+    /// One agent turn, streamed.
+    ///
+    /// The callback is invoked per event as it arrives, which is the whole
+    /// point: an agent turn takes tens of seconds, and a client that shows
+    /// nothing until the end is indistinguishable from one that has hung.
+    ///
+    /// Both backends stream. The Cymose route sends our own `event:`/`data:`
+    /// pairs; OpenRouter sends OpenAI's format, translated on the way in, so
+    /// nothing above this line has to know which key paid for the turn.
+    pub async fn inference_stream<F>(&self, req: &InferenceRequest, mut on_event: F) -> Result<()>
+    where
+        F: FnMut(StreamEvent),
+    {
+        use futures_util::StreamExt;
+
+        let (response, openai) = match &self.backend {
+            Backend::OpenRouter { api_key } => {
+                if api_key.trim().is_empty() {
+                    return Err(Error::NotAuthenticated);
+                }
+                let body = self.openrouter_body(req, true);
+                let response = self
+                    .http
+                    .post(OPENROUTER_URL)
+                    .bearer_auth(api_key)
+                    .header("HTTP-Referer", "https://cymose.dev")
+                    .header("X-Title", "Cymose Code")
+                    .json(&body)
+                    .send()
+                    .await?;
+                (response, true)
+            }
+            Backend::Cymose {
+                base_url,
+                token,
+                device_id,
+            } => {
+                let mut body = serde_json::to_value(req)?;
+                body["stream"] = serde_json::Value::Bool(true);
+                let response = self
+                    .http
+                    .post(format!(
+                        "{}/v1/code/inference",
+                        base_url.trim_end_matches('/')
+                    ))
+                    .bearer_auth(token)
+                    .header("X-Cymose-Device", device_id)
+                    .json(&body)
+                    .send()
+                    .await?;
+                (response, false)
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success() {
+            // Fail before a single byte is handed to the caller: an error that
+            // arrives after half an answer has been drawn is one the client has
+            // to unpaint.
+            let text = response.text().await.unwrap_or_default();
+            let (provider_status, message) = parse_error_body(&text);
+            return Err(match provider_status.unwrap_or(status.as_u16()) {
+                401 => Error::NotAuthenticated,
+                402 | 403 | 451 => Error::Refused(message),
+                other => Error::Upstream {
+                    status: other,
+                    message,
+                },
+            });
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+        while let Some(chunk) = stream.next().await {
+            // Bytes, not str: a multi-byte character can straddle a chunk
+            // boundary, and from_utf8_lossy on each chunk in isolation would
+            // turn it into two replacement characters.
+            let chunk = chunk?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            for (event, data) in drain_sse_frames(&mut buffer) {
+                let parsed = if openai {
+                    match parse_openai_chunk(&data) {
+                        Some(event) => event,
+                        None => continue,
+                    }
+                } else {
+                    parse_stream_event(&event, &data)
+                };
+                on_event(parsed);
+            }
+        }
+        Ok(())
     }
 
     /// The BYOK turn: OpenAI-compatible chat completions, straight to
@@ -405,6 +586,30 @@ impl Client {
     /// parsed object rather than a JSON string is one less place for a tool
     /// call to get double-encoded — and the agent loop should not have to know
     /// which backend it is talking to.
+    /// The OpenAI-shaped request body, used by both the streamed and the
+    /// non-streamed BYOK path. Kept in one place because two copies of this
+    /// translation is how a streamed turn quietly stops sending tools.
+    fn openrouter_body(&self, req: &InferenceRequest, stream: bool) -> serde_json::Value {
+        serde_json::json!({
+            "model": req.model,
+            "messages": req.messages.iter().map(openai_message).collect::<Vec<_>>(),
+            "max_tokens": req.max_tokens,
+            "stream": stream,
+            // Ask for a usage record on the final chunk. Without it a streamed
+            // turn reports zero tokens, and the router's budget arithmetic
+            // silently works off nothing.
+            "stream_options": if stream { serde_json::json!({ "include_usage": true }) } else { serde_json::Value::Null },
+            "tools": req.tools.iter().map(|t| serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.input_schema,
+                },
+            })).collect::<Vec<_>>(),
+        })
+    }
+
     async fn openrouter_inference(
         &self,
         req: &InferenceRequest,
@@ -414,20 +619,7 @@ impl Client {
             return Err(Error::NotAuthenticated);
         }
 
-        let body = serde_json::json!({
-            "model": req.model,
-            "messages": req.messages.iter().map(openai_message).collect::<Vec<_>>(),
-            "max_tokens": req.max_tokens,
-            "stream": false,
-            "tools": req.tools.iter().map(|t| serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": t.description,
-                    "parameters": t.input_schema,
-                },
-            })).collect::<Vec<_>>(),
-        });
+        let body = self.openrouter_body(req, false);
 
         let response = self
             .http
@@ -769,6 +961,76 @@ mod tests {
         assert!(!Client::openrouter("").is_authenticated());
         assert!(!Client::openrouter("   ").is_authenticated());
         assert!(Client::openrouter("sk-or-v1-whatever").is_authenticated());
+    }
+
+    #[test]
+    fn a_frame_split_across_chunks_is_held_until_it_is_whole() {
+        // The failure this prevents: parse what arrived, and a message cut
+        // mid-JSON is dropped. It works on a fast local connection and loses
+        // one message in fifty over bad wifi, which is the worst kind of bug
+        // to own.
+        let mut buffer = String::new();
+
+        buffer.push_str("event: text_delta\ndata: {\"delta\":\"hel");
+        assert!(
+            drain_sse_frames(&mut buffer).is_empty(),
+            "a half-arrived frame must not be parsed"
+        );
+
+        buffer.push_str("lo\"}\n\n");
+        let frames = drain_sse_frames(&mut buffer);
+        assert_eq!(frames.len(), 1);
+        assert!(matches!(
+            parse_stream_event(&frames[0].0, &frames[0].1),
+            StreamEvent::TextDelta { delta } if delta == "hello"
+        ));
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn several_frames_in_one_chunk_all_come_out() {
+        let mut buffer = String::from(
+            "event: text_delta\ndata: {\"delta\":\"a\"}\n\n             event: text_delta\ndata: {\"delta\":\"b\"}\n\n             event: text_delta\ndata: {\"delta\":\"c\"}\n\n",
+        );
+        let frames = drain_sse_frames(&mut buffer);
+        assert_eq!(frames.len(), 3);
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn crlf_and_keepalive_comments_are_survivable() {
+        // Different servers and proxies disagree about both, and a stream that
+        // works against one and not the other is unreproducible.
+        let mut buffer = String::from(
+            ": keep-alive\r\n\r\nevent: text_delta\r\ndata: {\"delta\":\"x\"}\r\n\r\n",
+        );
+        let frames = drain_sse_frames(&mut buffer);
+        assert_eq!(frames.len(), 1, "the heartbeat is not an event");
+        assert_eq!(frames[0].1, "{\"delta\":\"x\"}");
+    }
+
+    #[test]
+    fn openrouter_chunks_translate_into_our_events() {
+        // BYOK speaks OpenAI's format: no event line, deltas under choices.
+        let delta = parse_openai_chunk(r#"{"choices":[{"delta":{"content":"hi"}}]}"#);
+        assert!(matches!(delta, Some(StreamEvent::TextDelta { delta }) if delta == "hi"));
+
+        // A role-only opener and a keep-alive are not events.
+        assert!(parse_openai_chunk(r#"{"choices":[{"delta":{"role":"assistant"}}]}"#).is_none());
+        assert!(parse_openai_chunk("[DONE]").is_none());
+
+        let done = parse_openai_chunk(
+            r#"{"model":"anthropic/claude-sonnet-5","choices":[{"finish_reason":"stop","delta":{}}],"usage":{"input_tokens":10,"output_tokens":3}}"#,
+        );
+        match done {
+            Some(StreamEvent::Done {
+                stop_reason, model, ..
+            }) => {
+                assert_eq!(stop_reason, "stop");
+                assert_eq!(model, "anthropic/claude-sonnet-5");
+            }
+            other => panic!("expected Done, got {other:?}"),
+        }
     }
 
     #[test]

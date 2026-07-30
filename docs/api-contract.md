@@ -68,13 +68,20 @@ written to the session store, and never included in a bug report — see
 | `POST /v1/promote` | `cymose promote` — outcome to a Web conclusion node | synchronous JSON |
 | `GET /v1/sync/tree` | reading the Web tree into a local store | synchronous JSON |
 
-`/v1/code/*` is implemented on the API and not yet deployed. Both routes accept
-`stream: false` and answer with one JSON body — which is what
-`api::Client::inference` sends today, and what makes the contract testable with
-`curl`. Asking for a stream still returns `Error::NotImplemented` on the client:
-the SSE transport is the remaining piece, and failing loudly beats silently
-buffering a turn that should render as it arrives. The event shapes below are
-already parsed and tested (`api::parse_stream_event`).
+`/v1/code/*` is implemented on the API. Both routes accept `stream: false` and
+answer with one JSON body, which is what `api::Client::inference` sends and
+what makes the contract testable with `curl`.
+
+**Streaming works.** `api::Client::inference_stream` reads SSE and hands the
+caller one event at a time; a turn takes tens of seconds and a client that
+shows nothing until the end is indistinguishable from one that has hung. Both
+backends stream — this route with the events below, and OpenRouter with
+OpenAI's format, translated at the transport so nothing above it knows which
+key paid.
+
+Frames are buffered until the blank line that ends them. A chunk boundary
+lands mid-JSON often enough to matter and never on a fast local connection,
+which is exactly the kind of bug that ships.
 
 ### `POST /v1/code/inference`
 
