@@ -52,6 +52,20 @@ impl ApiMessage {
         }
     }
 
+    /// The assistant's own turn when it asked for tools.
+    ///
+    /// Content is null rather than empty when the model said nothing before
+    /// calling — some providers reject an empty string in that position, and
+    /// "" and null mean different things to all of them.
+    pub fn assistant_tool_calls(text: &str, calls: &[ToolCall]) -> Self {
+        ApiMessage {
+            role: "assistant".into(),
+            content: (!text.trim().is_empty()).then(|| text.to_string()),
+            tool_calls: calls.to_vec(),
+            tool_call_id: None,
+        }
+    }
+
     /// The result of running a tool, on its way back to the model.
     pub fn tool_result(tool_call_id: &str, content: impl Into<String>) -> Self {
         ApiMessage {
