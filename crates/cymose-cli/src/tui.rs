@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use cymose_core::api::Account;
 use cymose_core::context::ContextBuilder;
 use cymose_core::session::TreeNode;
 use cymose_core::{SessionStatus, Store};
@@ -19,9 +20,9 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Pa
 use ratatui::DefaultTerminal;
 use tui_textarea::TextArea;
 
-pub fn run(store: Store, workspace: String) -> Result<()> {
+pub fn run(store: Store, workspace: String, account: Account) -> Result<()> {
     let mut terminal = ratatui::init();
-    let result = App::new(store, workspace)?.run(&mut terminal);
+    let result = App::new(store, workspace, account)?.run(&mut terminal);
     // Restore before propagating: an error printed into raw mode is unreadable.
     ratatui::restore();
     result
@@ -36,6 +37,9 @@ enum Mode {
 struct App {
     store: Store,
     workspace: String,
+    /// Shown in the status line: which plan is paying for this, and what is
+    /// left of it. The gate already ran — this is the receipt, not the check.
+    account: Account,
     nodes: Vec<TreeNode>,
     /// Indices into `nodes`, in display order, with the depth to indent by.
     rows: Vec<(usize, usize)>,
@@ -46,12 +50,13 @@ struct App {
 }
 
 impl App {
-    fn new(store: Store, workspace: String) -> Result<Self> {
+    fn new(store: Store, workspace: String, account: Account) -> Result<Self> {
         let mut input = TextArea::default();
         input.set_placeholder_text("describe the task, Enter to start a session");
         let mut app = App {
             store,
             workspace,
+            account,
             nodes: Vec::new(),
             rows: Vec::new(),
             selection: ListState::default(),
@@ -199,7 +204,27 @@ impl App {
                 Style::new().fg(FAILED),
             ));
         }
-        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+
+        // The plan, right-aligned. Not a nag — the gate already ran and let
+        // them in. It is there because an agent spends real credits and the
+        // person driving it should be able to see what's left without leaving
+        // the terminal.
+        let left = Line::from(spans);
+        let remaining = self
+            .account
+            .standard_cap
+            .saturating_sub(self.account.standard_used);
+        let plan = Line::from(vec![
+            Span::styled(
+                self.account.plan_label().to_string(),
+                Style::new().fg(MUTED),
+            ),
+            Span::styled(format!("  {remaining} left "), Style::new().fg(FAINT)),
+        ])
+        .right_aligned();
+
+        frame.render_widget(Paragraph::new(left), area);
+        frame.render_widget(Paragraph::new(plan), area);
     }
 
     fn draw_tree(&mut self, frame: &mut Frame, area: Rect) {

@@ -11,9 +11,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use cymose_core::api::{Backend, Client};
+use cymose_core::api::{Account, Backend, Client};
 use cymose_core::context::ContextBuilder;
-use cymose_core::{Config, Store};
+use cymose_core::{Config, Credentials, Store};
 
 #[derive(Parser)]
 #[command(
@@ -33,6 +33,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Sign in to Cymose
+    Login {
+        /// Paste a token instead of being prompted (for scripts and CI).
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Forget the stored token
+    Logout,
+    /// Show who you're signed in as and what's left
+    Whoami,
     /// Link the current directory to a workspace
     Init,
     /// Start a session
@@ -72,12 +82,16 @@ async fn main() -> Result<()> {
         Some(command) => run(command, &store_path).await,
         // Bare `cymose` is the TUI — the common case shouldn't need a verb.
         None => {
-            let store = Store::open(&store_path)?;
             let root = std::env::current_dir()?;
+            // Before the terminal goes into raw mode: an error printed from
+            // inside the alternate screen is unreadable, and "you need a plan"
+            // is exactly the message that must not arrive that way.
+            let (_, account) = authenticated(&root).await?;
+            let store = Store::open(&store_path)?;
             let workspace = store
                 .workspace_for_path(&root)?
                 .context("this directory is not linked to a workspace — run `cymose init`")?;
-            tui::run(store, workspace)
+            tui::run(store, workspace, account)
         }
     }
 }
@@ -98,6 +112,7 @@ async fn run(command: Command, store_path: &std::path::Path) -> Result<()> {
         }
 
         Command::New { title, parent } => {
+            authenticated(&root).await?;
             let workspace = workspace(&store, &root)?;
             let session = store.create_session(&workspace, &title, parent.as_deref())?;
             println!("session {} — {}", session.id, session.title);
@@ -128,6 +143,7 @@ async fn run(command: Command, store_path: &std::path::Path) -> Result<()> {
         }
 
         Command::Resume { id } => {
+            authenticated(&root).await?;
             let session = store.session(&id)?;
             println!(
                 "{} — {} [{}]",
@@ -167,30 +183,54 @@ async fn run(command: Command, store_path: &std::path::Path) -> Result<()> {
             );
         }
 
-        Command::Sync => {
+        Command::Login { token } => {
             let config = Config::load(Some(&root))?;
-            let Some(token) = config.api.token.filter(|t| !t.trim().is_empty()) else {
-                anyhow::bail!(
-                    "no Cymose token configured.\n\n\
-                     `cymose sync` reads the tree you planned in Cymose Web, which needs an \
-                     account. Everything else in this build works without one.\n\n\
-                     Put your token in {}:\n\n    [api]\n    token = \"...\"\n",
-                    Config::config_dir()?.join("config.toml").display()
-                );
+            let token = match token {
+                Some(token) => token,
+                None => prompt_for_token(&config)?,
             };
+            let client = client_with(&config, token.clone());
+            // Verify before storing. A token saved without a check is a token
+            // that fails later, somewhere less convenient to explain.
+            let account = client.account().await?;
+            let path = Credentials::save(&token)?;
+            println!("signed in — {} plan", account.plan_label());
+            println!("token stored in {}", path.display());
+            if !account.may_use_code() {
+                println!();
+                println!("{}", upgrade_notice(&account));
+            }
+        }
 
+        Command::Logout => {
+            Credentials::clear()?;
+            println!("signed out.");
+        }
+
+        Command::Whoami => {
+            let (_, account) = authenticated(&root).await?;
+            println!("{} plan", account.plan_label());
+            println!(
+                "standard credits: {} / {}",
+                account.standard_used, account.standard_cap
+            );
+            println!(
+                "premium credits:  {} / {}",
+                account.premium_used,
+                account.premium_cap + account.premium_extra
+            );
+            if !account.may_use_code() {
+                println!();
+                println!("{}", upgrade_notice(&account));
+            }
+        }
+
+        Command::Sync => {
             // Read-only. Pull before push: nothing here writes back, so there
             // is no conflict resolution to get wrong, and the direction that
             // hurts every day — planning in the browser and rebuilding the
             // context here by hand — is the one this fixes.
-            let client = Client::new(Backend::Cymose {
-                base_url: config.api.base_url.clone(),
-                token,
-                // Device identity exists for per-device rate limiting on the
-                // metered routes. Reading your own tree is neither metered nor
-                // per-device, so a constant is honest here.
-                device_id: "cymose-cli".into(),
-            });
+            let (client, _) = authenticated(&root).await?;
             let tree = client.sync_tree().await?;
             if tree.nodes.is_empty() {
                 println!("nothing on the web yet.");
@@ -206,6 +246,87 @@ async fn run(command: Command, store_path: &std::path::Path) -> Result<()> {
         Command::Sidecar => unreachable!("handled in main"),
     }
     Ok(())
+}
+
+/// A client pointed at the API with a token in hand.
+fn client_with(config: &Config, token: String) -> Client {
+    Client::new(Backend::Cymose {
+        base_url: config.api.base_url.clone(),
+        token,
+        // Device identity exists for the per-device rate limits on the metered
+        // routes. The CLI is one device per machine, and the store path is the
+        // closest thing to a stable per-machine id we already have.
+        device_id: "cymose-cli".into(),
+    })
+}
+
+/// Sign-in plus the plan gate, in the order the user experiences them.
+///
+/// Cymose Code runs on an account with an active plan. That is a reversal of
+/// 0.1's BYOK-only stance and it is deliberate: an agent turn costs an order
+/// of magnitude more than a chat turn, so the thing funding it has to be a
+/// subscription rather than a shared free pool. Bringing your own provider key
+/// is still supported, and still needs the account — the plan is the licence
+/// to use the client, the key decides whose credit the tokens come out of.
+async fn authenticated(root: &std::path::Path) -> Result<(Client, Account)> {
+    let config = Config::load(Some(root))?;
+    let Some(token) = Credentials::load(&config)? else {
+        anyhow::bail!(
+            "not signed in.\n\n\
+             Cymose Code runs on your Cymose account. Run `cymose login`, or see \
+             {}/pricing if you don't have a plan yet.",
+            landing_url()
+        );
+    };
+
+    let client = client_with(&config, token);
+    let account = client.account().await?;
+    if !account.may_use_code() {
+        anyhow::bail!("{}", upgrade_notice(&account));
+    }
+    Ok((client, account))
+}
+
+/// Said the same way everywhere it comes up, because a paywall that phrases
+/// itself differently in three places reads as three different problems.
+fn upgrade_notice(account: &Account) -> String {
+    format!(
+        "Cymose Code needs an active plan. This account is on {}.\n\n\
+         Pro is $19/month and Max is $49, tax included — both include Code, the \
+         VS Code extension, and the web canvas. {}/pricing",
+        account.plan_label(),
+        landing_url()
+    )
+}
+
+fn landing_url() -> String {
+    std::env::var("CYMOSE_LANDING_URL").unwrap_or_else(|_| "https://cymose.dev".into())
+}
+
+/// Reads a token from the terminal.
+///
+/// A paste rather than a browser round trip: a device-code flow needs a route
+/// on the API that doesn't exist yet, and shipping a worse login now would
+/// mean two logins to support later. The prompt says exactly where to get it.
+fn prompt_for_token(config: &Config) -> Result<String> {
+    use std::io::{BufRead, Write};
+
+    println!(
+        "Sign in at {}/account and copy your CLI token.",
+        landing_url()
+    );
+    println!("(It's the same account as the web app. Nothing is sent anywhere else.)");
+    print!("\nToken: ");
+    std::io::stdout().flush()?;
+
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    let token = line.trim().to_string();
+    if token.is_empty() {
+        anyhow::bail!("no token entered");
+    }
+    let _ = config;
+    Ok(token)
 }
 
 fn workspace(store: &Store, root: &std::path::Path) -> Result<String> {

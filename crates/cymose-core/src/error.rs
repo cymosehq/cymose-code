@@ -18,6 +18,12 @@ pub enum Error {
     #[error("not authenticated — run `cymose login`")]
     NotAuthenticated,
 
+    /// Signed in, but the account isn't on a plan that includes Code. Carries
+    /// the plan name so the message can say what they *are* on rather than
+    /// only what they aren't.
+    #[error("Cymose Code needs an active plan — this account is on {0}")]
+    PlanRequired(String),
+
     #[error("the session store is locked by another Cymose client")]
     StoreLocked,
 

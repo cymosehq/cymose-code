@@ -224,6 +224,50 @@ impl SessionSummary {
 /// The Cymose backend is the later half: it exists (see the API's
 /// `/v1/code/*`) and is what Cymose Web syncs through, but it is not wired up
 /// here yet and nothing in this build depends on it.
+/// The signed-in account, as `GET /v1/credits` describes it.
+///
+/// Deliberately the same payload the web app reads. A second endpoint that
+/// answered "which plan is this" would be a second thing to keep true.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct Account {
+    pub plan: String,
+    #[serde(default)]
+    pub is_admin: bool,
+    #[serde(default)]
+    pub standard_used: u32,
+    #[serde(default)]
+    pub standard_cap: u32,
+    #[serde(default)]
+    pub premium_used: u32,
+    #[serde(default)]
+    pub premium_cap: u32,
+    #[serde(default)]
+    pub premium_extra: u32,
+    #[serde(default)]
+    pub standard_reset_at: Option<String>,
+}
+
+impl Account {
+    /// Whether this account may use Cymose Code at all.
+    ///
+    /// The client is Apache-2.0 and the check is one `if` — anybody who wants
+    /// to remove it can, in about a minute. That is not what the gate is for.
+    /// It is for the honest majority, and for saying plainly what the deal is:
+    /// the client is open, the service behind it is paid for.
+    pub fn may_use_code(&self) -> bool {
+        self.is_admin || matches!(self.plan.as_str(), "pro" | "max")
+    }
+
+    /// What to call the plan in a sentence.
+    pub fn plan_label(&self) -> &str {
+        match self.plan.as_str() {
+            "pro" => "Pro",
+            "max" => "Max",
+            _ => "Free",
+        }
+    }
+}
+
 /// Tree format this build speaks. Sent by the server as `version`.
 pub const SYNC_VERSION: u32 = 1;
 
@@ -433,6 +477,15 @@ impl Client {
     /// definition — there is nothing to promote to without it.
     pub async fn promote(&self, body: &serde_json::Value) -> Result<serde_json::Value> {
         self.post("/v1/promote", body).await
+    }
+
+    /// Who the caller is, what they pay for, and what is left.
+    ///
+    /// The gate every entry point runs before doing anything expensive. It is
+    /// one round trip against a route the server already serves, so there is no
+    /// separate "is my token good" endpoint to keep in sync with this one.
+    pub async fn account(&self) -> Result<Account> {
+        self.get("/v1/credits").await
     }
 
     /// The account's Web tree, read into whatever this client stores.

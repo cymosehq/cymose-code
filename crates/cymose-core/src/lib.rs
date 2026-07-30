@@ -8,6 +8,7 @@
 
 pub mod agent;
 pub mod api;
+pub mod auth;
 pub mod config;
 pub mod context;
 pub mod error;
@@ -16,6 +17,7 @@ pub mod session;
 pub mod store;
 pub mod summarize;
 
+pub use auth::Credentials;
 pub use config::Config;
 pub use error::{Error, Result};
 pub use session::{Session, SessionStatus, Summary};

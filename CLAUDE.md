@@ -44,10 +44,16 @@ No client may reimplement core behaviour. If two of them would disagree about
 something, that something belongs behind the sidecar protocol
 ([docs/sidecar-protocol.md](docs/sidecar-protocol.md)).
 
-0.1 is BYOK: turns go straight to OpenRouter on the user's key
-(`api::Backend::OpenRouter`). The Cymose backend exists and is switched off;
-don't wire client code to it without saying so in the README, which currently
-promises the opposite.
+0.1 requires a Cymose account on a paid plan. `cymose login` stores a token in
+`~/.config/cymose/credentials.toml` (never in `config.toml` — that file gets
+shared); every entry point runs `authenticated()`, which fetches the account
+and refuses if the plan doesn't include Code.
+
+BYOK is the second path, not the first: `OPENROUTER_API_KEY` sends turns to
+OpenRouter on the user's own account, and still needs the plan. The
+subscription is the licence to use the client; the key decides whose credit is
+spent. See docs/spec.md §7 for why this reversed twice and why this is the
+settled answer — change it only with that argument in hand.
 
 ## Commands
 

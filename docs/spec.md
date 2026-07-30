@@ -142,15 +142,34 @@ Three questions that were open at the start of the project and are now settled:
   clients eventually disagree about something subtle.
 - **Apache-2.0.** Patent grant, and an explicit position on the project name
   (see [NOTICE](../NOTICE)).
-- **BYOK first, cloud later — reversed.** This started as "cloud first": an
-  account, and turns through the Cymose API. Two things changed it. A coding
-  agent burns an order of magnitude more per session than a chat turn, so a
-  free tier funded out of one shared balance would last days, not months. And a
-  beta that needs an account, a payment rail and a working backend has three
-  ways to fail before anyone sees the product. 0.1 is BYOK only: the user's own
-  OpenRouter key, straight to OpenRouter. The Cymose backend is built (the API
-  serves `/v1/code/*`) and switched off here; it is what the web integration
-  will run on.
+- **Account first, BYOK second — reversed again, and this is the settled
+  answer.** The project began "cloud first", flipped to BYOK-only for 0.1, and
+  has now flipped back. Each move was right at the time and the reasoning is
+  worth keeping, because the same argument decides the next one.
+
+  BYOK-only was chosen because an agent burns an order of magnitude more per
+  session than a chat turn, and a free tier funded from one shared balance
+  would have lasted days. It was also the shortest path to something people
+  could run: a beta needing an account, a payment rail and a working backend
+  has three ways to fail before anybody sees the product.
+
+  Both of those have since been answered rather than avoided. There is a
+  payment rail, it has taken real money, and there are plans — so the thing
+  funding an agent turn is a subscription, which is what it always had to be.
+  The free-tier problem doesn't arise: **Cymose Code requires an account on an
+  active plan.** Not a free tier with small limits — none. An agent session is
+  not a thing that fits inside a free allowance, and pretending otherwise ships
+  a product that stops working halfway through the first task.
+
+  BYOK survives as the second path, not the first. The plan is the licence to
+  use the client; the key decides whose credit the tokens come out of. Someone
+  on Max who wants Opus on their own OpenRouter account can have that, and
+  still gets the summariser, the sync, and a client that is being maintained.
+
+  The gate is one `if` in an Apache-2.0 repository and anybody who wants it
+  gone can have it gone in a minute. That is not what it's for. It's for the
+  honest majority, and for stating the deal plainly: the client is open, the
+  service behind it is paid for.
 
 ## 8. Still open
 

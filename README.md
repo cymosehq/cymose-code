@@ -16,15 +16,26 @@ what a session is.
 
 ## 0.1 beta — read this before you install
 
-**This is a 0.1 beta. Turns run on your own OpenRouter key (BYOK) and nothing
-else.** There is no billing and no server of ours in the path of a turn: your
-key goes to OpenRouter, and you see every cent of it on your own OpenRouter
-dashboard. No account is required to use any of it.
+**This is a 0.1 beta, and it needs a Cymose account on a paid plan.** Pro or
+Max — the same subscription that covers the web canvas and the VS Code
+extension. There is no free tier for Code, and that is deliberate rather than
+stingy: an agent session costs an order of magnitude more than a chat turn, and
+a free allowance it could fit inside would run out halfway through the first
+real task.
 
 What that means concretely:
 
-- **You need an [OpenRouter](https://openrouter.ai) key.** Put it in
-  `OPENROUTER_API_KEY`. Without one, nothing runs.
+- **Sign in first.** `cymose login`, then paste the token from your account
+  page. `cymose whoami` says which plan you're on and what's left of it.
+- **Bringing your own key is supported, and it is the second path, not the
+  first.** Set `OPENROUTER_API_KEY` and turns go to OpenRouter on your account
+  instead of spending Cymose credits. It still needs the plan: the
+  subscription is the licence to use the client, the key only decides whose
+  credit the tokens come out of.
+- **The gate is one `if` in an Apache-2.0 repository.** Anybody who wants it
+  gone can have it gone in a minute, and we know that. It's there for the
+  honest majority, and to state the deal plainly — the client is open, the
+  service behind it is paid for.
 - **[Cymose Web](https://cymose.dev) integration reads only, and is optional.**
   `cymose sync` prints the tree you planned in the browser — titles, promoted
   conclusions, pinned notes. It is the one thing here that talks to a server of
