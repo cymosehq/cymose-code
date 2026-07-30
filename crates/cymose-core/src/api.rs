@@ -453,6 +453,7 @@ pub enum Backend {
 
 const OPENROUTER_URL: &str = "https://openrouter.ai/api/v1/chat/completions";
 
+#[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
     backend: Backend,

@@ -86,12 +86,32 @@ async fn main() -> Result<()> {
             // Before the terminal goes into raw mode: an error printed from
             // inside the alternate screen is unreadable, and "you need a plan"
             // is exactly the message that must not arrive that way.
-            let (_, account) = authenticated(&root).await?;
+            let (client, account) = authenticated(&root).await?;
             let store = Store::open(&store_path)?;
             let workspace = store
                 .workspace_for_path(&root)?
                 .context("this directory is not linked to a workspace — run `cymose init`")?;
-            tui::run(store, workspace, account)
+
+            // One session per launch. The transcript in front of you is a
+            // node in the graph like any other, so a branch opened from it
+            // later inherits what happened here.
+            let session = store.create_session(&workspace, "terminal session", None)?;
+            let config = Config::load(Some(&root))?;
+            let router = cymose_core::router::Router::new(config.router.clone());
+            let model = router
+                .head(cymose_core::router::TaskKind::Code)?
+                .to_string();
+
+            tui::run(tui::Context {
+                store,
+                workspace,
+                session_id: session.id,
+                account,
+                client,
+                toolbox: cymose_core::agent::Toolbox::new(root.clone(), config.agent.clone()),
+                model,
+                runtime: tokio::runtime::Handle::current(),
+            })
         }
     }
 }

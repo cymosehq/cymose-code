@@ -83,6 +83,7 @@ impl CommandPolicy {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Toolbox {
     root: PathBuf,
     policy: CommandPolicy,

@@ -1,501 +1,518 @@
-//! The terminal client: session tree, detail pane, prompt line.
+//! The terminal client: a conversation, streamed, with the tools it ran.
 //!
-//! Rendering only. Everything it shows comes out of `cymose-core`, so the VS
-//! Code sidebar can show the same thing without a second implementation of
-//! how a tree is built or what a session inherits.
+//! Rendering only. Every decision it displays was made in `cymose-core`, so
+//! the VS Code panel shows the same thing without a second implementation of
+//! what the agent did.
+//!
+//! The shape is a transcript rather than a tree browser. A coding agent is
+//! something you talk to and watch: the answer arrives token by token, tools
+//! announce themselves before they run, and refusals are visible rather than
+//! silent. The session graph is still underneath — it is what a branch
+//! inherits — but it isn't what you look at while working.
 
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 use anyhow::Result;
-use cymose_core::api::Account;
-use cymose_core::context::ContextBuilder;
-use cymose_core::session::TreeNode;
+use cymose_core::agent::Toolbox;
+use cymose_core::api::{Account, ApiMessage, Client};
+use cymose_core::runner::{AgentEvent, Outcome, Turn};
+use cymose_core::session::Role;
 use cymose_core::{SessionStatus, Store};
 // Crossterm comes from ratatui rather than as a direct dependency: tui-textarea
 // takes events from ratatui's copy, and two crossterm versions in the tree make
 // a key event from one unusable by the other.
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::DefaultTerminal;
 use tui_textarea::TextArea;
 
-pub fn run(store: Store, workspace: String, account: Account) -> Result<()> {
+/// Everything the terminal needs that it didn't build itself.
+pub struct Context {
+    pub store: Store,
+    pub workspace: String,
+    pub session_id: String,
+    pub account: Account,
+    pub client: Client,
+    pub toolbox: Toolbox,
+    pub model: String,
+    /// The agent loop is async and the render loop is not. Turns are spawned
+    /// onto this and report back over a channel — polling a future from inside
+    /// a draw call would block the frame that is supposed to be showing it.
+    pub runtime: tokio::runtime::Handle,
+}
+
+pub fn run(ctx: Context) -> Result<()> {
     let mut terminal = ratatui::init();
-    let result = App::new(store, workspace, account)?.run(&mut terminal);
+    let result = App::new(ctx).run(&mut terminal);
     // Restore before propagating: an error printed into raw mode is unreadable.
     ratatui::restore();
     result
 }
 
-#[derive(PartialEq)]
-enum Mode {
-    Navigate,
-    Prompt,
+/// One block in the transcript.
+enum Entry {
+    User(String),
+    /// Grows as deltas arrive, which is why it is one entry and not many.
+    Assistant(String),
+    Tool {
+        name: String,
+        detail: String,
+        state: ToolState,
+    },
+    /// Ours, not the conversation's — errors, limits, the opening line.
+    Note(String),
+}
+
+enum ToolState {
+    Running,
+    Done { truncated: bool },
+    Refused(String),
+}
+
+/// What the worker sends back: `AgentEvent`, plus the two ways a turn ends.
+enum Msg {
+    Event(AgentEvent),
+    Done(Box<Outcome>),
+    Failed(String),
 }
 
 struct App {
-    store: Store,
-    workspace: String,
-    /// Shown in the status line: which plan is paying for this, and what is
-    /// left of it. The gate already ran — this is the receipt, not the check.
-    account: Account,
-    nodes: Vec<TreeNode>,
-    /// Indices into `nodes`, in display order, with the depth to indent by.
-    rows: Vec<(usize, usize)>,
-    selection: ListState,
-    mode: Mode,
+    ctx: Context,
+    entries: Vec<Entry>,
+    /// The conversation as the model will be shown it next time.
+    history: Vec<ApiMessage>,
     input: TextArea<'static>,
-    log: Vec<String>,
+    /// Some while a turn is in flight; the input is disabled and this is drained.
+    inbox: Option<Receiver<Msg>>,
+    /// Lines scrolled up from the bottom. 0 pins to the newest, which is where
+    /// it stays unless the user deliberately goes looking.
+    scrollback: u16,
+    spinner: usize,
+    quitting: bool,
 }
 
+const SPINNER: [&str; 4] = ["·", "•", "●", "•"];
+const PLACEHOLDER: &str = "Ask for a change. Enter to send, Shift+Enter for a new line.";
+
 impl App {
-    fn new(store: Store, workspace: String, account: Account) -> Result<Self> {
+    fn new(ctx: Context) -> Self {
         let mut input = TextArea::default();
-        input.set_placeholder_text("describe the task, Enter to start a session");
-        let mut app = App {
-            store,
-            workspace,
-            account,
-            nodes: Vec::new(),
-            rows: Vec::new(),
-            selection: ListState::default(),
-            mode: Mode::Navigate,
+        input.set_placeholder_text(PLACEHOLDER);
+        input.set_cursor_line_style(Style::default());
+
+        let entries = vec![Entry::Note(format!(
+            "{} · {} plan · workspace {}",
+            ctx.model,
+            ctx.account.plan_label(),
+            short(&ctx.workspace),
+        ))];
+
+        App {
+            ctx,
+            entries,
+            history: Vec::new(),
             input,
-            log: vec!["agent turns are not wired up yet — see docs/api-contract.md".into()],
-        };
-        app.reload()?;
-        Ok(app)
-    }
-
-    fn reload(&mut self) -> Result<()> {
-        self.nodes = self.store.tree(&self.workspace)?;
-        self.rows = flatten(&self.nodes, None, 0);
-        if !self.rows.is_empty() && self.selection.selected().is_none() {
-            self.selection.select(Some(0));
+            inbox: None,
+            scrollback: 0,
+            spinner: 0,
+            quitting: false,
         }
-        Ok(())
     }
 
-    fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
-        loop {
+    fn busy(&self) -> bool {
+        self.inbox.is_some()
+    }
+
+    fn run(mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        while !self.quitting {
             terminal.draw(|frame| self.draw(frame))?;
-
-            // Poll rather than block: once turns stream, this loop also has to
-            // drain agent events, and a blocking read would sit on them.
-            if !event::poll(Duration::from_millis(100))? {
-                continue;
-            }
-            let Event::Key(key) = event::read()? else {
-                continue;
-            };
-            if key.kind != KeyEventKind::Press {
-                continue;
-            }
-
-            match self.mode {
-                Mode::Navigate => match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                    KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
-                    KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
-                    KeyCode::Char('i') | KeyCode::Char('n') => self.mode = Mode::Prompt,
-                    KeyCode::Char('r') => self.reload()?,
-                    _ => {}
-                },
-                Mode::Prompt => match key.code {
-                    KeyCode::Esc => self.mode = Mode::Navigate,
-                    KeyCode::Enter => {
-                        let title = self.input.lines().join(" ").trim().to_string();
-                        if !title.is_empty() {
-                            self.start_session(&title)?;
-                            self.input = TextArea::default();
-                        }
-                        self.mode = Mode::Navigate;
+            self.drain();
+            // Short enough that a streamed token looks continuous, long enough
+            // that an idle terminal isn't spinning a core.
+            if event::poll(Duration::from_millis(60))? {
+                if let Event::Key(key) = event::read()? {
+                    if key.kind == KeyEventKind::Press {
+                        self.on_key(key.code, key.modifiers);
                     }
-                    _ => {
-                        self.input.input(key);
-                    }
-                },
+                }
+            }
+            self.spinner = self.spinner.wrapping_add(1);
+        }
+        Ok(())
+    }
+
+    fn on_key(&mut self, code: KeyCode, mods: KeyModifiers) {
+        match code {
+            KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => self.quitting = true,
+            KeyCode::Esc if !self.busy() => self.quitting = true,
+            KeyCode::PageUp => self.scrollback = self.scrollback.saturating_add(8),
+            KeyCode::PageDown => self.scrollback = self.scrollback.saturating_sub(8),
+            KeyCode::Enter if !mods.contains(KeyModifiers::SHIFT) && !self.busy() => self.send(),
+            // Everything else while a turn runs would edit a box that is about
+            // to be replaced.
+            _ if self.busy() => {}
+            other => {
+                self.input.input(KeyEvent::new(other, mods));
             }
         }
     }
 
-    /// A new session inherits from whatever is selected — which is the whole
-    /// point of the tree being on screen while you type.
-    fn start_session(&mut self, title: &str) -> Result<()> {
-        let parent = self
-            .selection
-            .selected()
-            .and_then(|i| self.rows.get(i))
-            .map(|(node, _)| self.nodes[*node].id.clone());
-
-        let session = self
-            .store
-            .create_session(&self.workspace, title, parent.as_deref())?;
-        let inherited = ContextBuilder::new(&self.store).build(&session.id)?;
-        self.log.push(format!(
-            "session {} created, inheriting {} summary(ies)",
-            &session.id[..8],
-            inherited.items.len()
-        ));
-        self.reload()?;
-        Ok(())
-    }
-
-    fn move_selection(&mut self, delta: isize) {
-        if self.rows.is_empty() {
+    /// Hands the prompt to the agent loop and starts listening.
+    fn send(&mut self) {
+        let prompt = self.input.lines().join("\n").trim().to_string();
+        if prompt.is_empty() {
             return;
         }
-        let current = self.selection.selected().unwrap_or(0) as isize;
-        let next = (current + delta).clamp(0, self.rows.len() as isize - 1);
-        self.selection.select(Some(next as usize));
+        self.input = TextArea::default();
+        self.input.set_placeholder_text("Working…");
+        self.input.set_cursor_line_style(Style::default());
+
+        self.entries.push(Entry::User(prompt.clone()));
+        self.history.push(ApiMessage::text("user", &prompt));
+        self.scrollback = 0;
+
+        // The transcript belongs in the store, not only on screen. A session
+        // is a node in the graph, and what a branch inherits is a summary of
+        // these messages — a terminal that kept them in memory would leave
+        // every branch opened from it inheriting nothing.
+        self.record(Role::User, &prompt, 0, 0);
+        let _ = self
+            .ctx
+            .store
+            .set_status(&self.ctx.session_id, SessionStatus::Running);
+
+        let (tx, rx) = mpsc::channel();
+        self.inbox = Some(rx);
+
+        // Cloned rather than borrowed: the turn outlives this call, and the
+        // App has to stay usable for drawing while it runs. History is sent
+        // without the prompt — the runner appends that itself.
+        let client = self.ctx.client.clone();
+        let toolbox = self.ctx.toolbox.clone();
+        let session_id = self.ctx.session_id.clone();
+        let model = self.ctx.model.clone();
+        let history = self.history[..self.history.len() - 1].to_vec();
+        let system = system_prompt();
+
+        self.ctx.runtime.spawn(async move {
+            let events = tx.clone();
+            let turn = Turn {
+                client: &client,
+                toolbox: &toolbox,
+                session_id: &session_id,
+                model: &model,
+                system: &system,
+                history,
+                prompt: &prompt,
+            };
+            let result = turn
+                .run(|event| {
+                    // A closed channel means the terminal is gone. The turn
+                    // finishes anyway rather than half-applying an edit.
+                    let _ = events.send(Msg::Event(event));
+                })
+                .await;
+            let _ = match result {
+                Ok(outcome) => tx.send(Msg::Done(Box::new(outcome))),
+                Err(error) => tx.send(Msg::Failed(error.to_string())),
+            };
+        });
     }
 
+    /// Takes whatever the worker has sent since the last frame.
+    fn drain(&mut self) {
+        let Some(rx) = &self.inbox else { return };
+
+        let mut batch = Vec::new();
+        let mut ended = None;
+        loop {
+            match rx.try_recv() {
+                Ok(Msg::Event(event)) => batch.push(event),
+                Ok(Msg::Done(outcome)) => {
+                    ended = Some(Ok(*outcome));
+                    break;
+                }
+                Ok(Msg::Failed(message)) => {
+                    ended = Some(Err(message));
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                // The worker dropped without a verdict. Rare, and silence is
+                // worse than saying so.
+                Err(TryRecvError::Disconnected) => {
+                    ended = Some(Err("the turn ended without a result".into()));
+                    break;
+                }
+            }
+        }
+
+        for event in batch {
+            self.apply(event);
+        }
+        match ended {
+            Some(Ok(outcome)) => self.finish(outcome),
+            Some(Err(message)) => {
+                self.entries.push(Entry::Note(message));
+                self.idle();
+            }
+            None => {}
+        }
+    }
+
+    fn apply(&mut self, event: AgentEvent) {
+        match event {
+            AgentEvent::Text(delta) => match self.entries.last_mut() {
+                Some(Entry::Assistant(text)) => text.push_str(&delta),
+                _ => self.entries.push(Entry::Assistant(delta)),
+            },
+            AgentEvent::ToolStarted { name, detail } => self.entries.push(Entry::Tool {
+                name,
+                detail,
+                state: ToolState::Running,
+            }),
+            AgentEvent::ToolFinished {
+                name, truncated, ..
+            } => self.close_tool(&name, ToolState::Done { truncated }),
+            AgentEvent::ToolRefused { name, reason } => {
+                self.close_tool(&name, ToolState::Refused(reason))
+            }
+            AgentEvent::ModelSwitched { from, to } => self
+                .entries
+                .push(Entry::Note(format!("{from} failed — trying {to}"))),
+        }
+    }
+
+    /// Marks the most recent running call of that tool as finished.
+    ///
+    /// By name and from the end, because several calls can be in flight in one
+    /// step and the last one started is the one being reported.
+    fn close_tool(&mut self, name: &str, state: ToolState) {
+        for entry in self.entries.iter_mut().rev() {
+            if let Entry::Tool {
+                name: n,
+                state: slot @ ToolState::Running,
+                ..
+            } = entry
+            {
+                if n == name {
+                    *slot = state;
+                    return;
+                }
+            }
+        }
+    }
+
+    fn finish(&mut self, outcome: Outcome) {
+        if !outcome.text.trim().is_empty() {
+            self.history
+                .push(ApiMessage::text("assistant", &outcome.text));
+            self.record(
+                Role::Assistant,
+                &outcome.text,
+                outcome.tokens.input,
+                outcome.tokens.output,
+            );
+        }
+        let _ = self
+            .ctx
+            .store
+            .set_status(&self.ctx.session_id, SessionStatus::Done);
+        if outcome.hit_step_limit {
+            self.entries.push(Entry::Note(
+                "stopped at the step limit — the task isn't finished. Ask it to carry on.".into(),
+            ));
+        }
+        if !outcome.files_touched.is_empty() {
+            self.entries.push(Entry::Note(format!(
+                "changed {}",
+                outcome.files_touched.join(", ")
+            )));
+        }
+        self.idle();
+    }
+
+    /// Writes one message to the store.
+    ///
+    /// A failure here is shown but doesn't stop the turn: losing the local
+    /// record of an answer is bad, and throwing away the answer itself
+    /// because of it is worse.
+    fn record(&mut self, role: Role, content: &str, tokens_in: u32, tokens_out: u32) {
+        if let Err(error) = self.ctx.store.append_message(
+            &self.ctx.session_id,
+            role,
+            content,
+            tokens_in,
+            tokens_out,
+        ) {
+            self.entries.push(Entry::Note(format!(
+                "couldn't save to the session: {error}"
+            )));
+        }
+    }
+
+    fn idle(&mut self) {
+        self.inbox = None;
+        self.input.set_placeholder_text(PLACEHOLDER);
+    }
+
+    // ---- drawing ----------------------------------------------------------
+
     fn draw(&mut self, frame: &mut Frame) {
+        let input_height = (self.input.lines().len() as u16).clamp(1, 6) + 2;
         let [header, body, footer] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(3),
-            Constraint::Length(3),
+            Constraint::Length(input_height),
         ])
         .areas(frame.area());
-        let [tree_area, detail_area] =
-            Layout::horizontal([Constraint::Percentage(38), Constraint::Percentage(62)])
-                .areas(body);
 
         self.draw_header(frame, header);
-        self.draw_tree(frame, tree_area);
-        self.draw_detail(frame, detail_area);
+        self.draw_transcript(frame, body);
         self.draw_input(frame, footer);
     }
 
-    /// One line, and it has to earn it: what you're in, what it costs, what
-    /// state things are in. A reversed bar the width of the terminal is the
-    /// default every TUI ships with and reads as unfinished.
     fn draw_header(&self, frame: &mut Frame, area: Rect) {
-        let done = self
-            .nodes
-            .iter()
-            .filter(|n| n.status == SessionStatus::Done)
-            .count();
-        let failed = self
-            .nodes
-            .iter()
-            .filter(|n| n.status == SessionStatus::Failed)
-            .count();
-
-        let mut spans = vec![
-            Span::styled(" cymose ", Style::new().fg(ACCENT).bold()),
-            Span::styled("· ", Style::new().fg(FAINT)),
-            Span::styled(
-                format!(
-                    "{} session{}",
-                    self.nodes.len(),
-                    if self.nodes.len() == 1 { "" } else { "s" }
-                ),
-                Style::new().fg(MUTED),
-            ),
-        ];
-        if done > 0 {
-            spans.push(Span::styled(format!("  {done} ✓"), Style::new().fg(DONE)));
-        }
-        if failed > 0 {
-            spans.push(Span::styled(
-                format!("  {failed} ✗"),
-                Style::new().fg(FAILED),
-            ));
-        }
-
-        // The plan, right-aligned. Not a nag — the gate already ran and let
-        // them in. It is there because an agent spends real credits and the
-        // person driving it should be able to see what's left without leaving
-        // the terminal.
-        let left = Line::from(spans);
+        let left = Line::from(vec![
+            Span::styled(" cymose ", Style::new().fg(TEXT).bold()),
+            Span::styled(short(&self.ctx.workspace), Style::new().fg(FAINT)),
+        ]);
         let remaining = self
+            .ctx
             .account
             .standard_cap
-            .saturating_sub(self.account.standard_used);
-        let plan = Line::from(vec![
+            .saturating_sub(self.ctx.account.standard_used);
+        let right = Line::from(vec![
+            Span::styled(self.ctx.model.clone(), Style::new().fg(MUTED)),
             Span::styled(
-                self.account.plan_label().to_string(),
-                Style::new().fg(MUTED),
+                format!("  {} · {remaining} left ", self.ctx.account.plan_label()),
+                Style::new().fg(FAINT),
             ),
-            Span::styled(format!("  {remaining} left "), Style::new().fg(FAINT)),
         ])
         .right_aligned();
 
         frame.render_widget(Paragraph::new(left), area);
-        frame.render_widget(Paragraph::new(plan), area);
+        frame.render_widget(Paragraph::new(right), area);
     }
 
-    fn draw_tree(&mut self, frame: &mut Frame, area: Rect) {
-        let selected = self.selection.selected();
-        let items: Vec<ListItem> = self
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(row, (index, depth))| {
-                let node = &self.nodes[*index];
-                let (mark, colour) = match node.status {
-                    SessionStatus::Done => ("✓", DONE),
-                    SessionStatus::Failed => ("✗", FAILED),
-                    SessionStatus::Running => ("◐", RUNNING),
-                    SessionStatus::Pending => ("○", FAINT),
-                };
-                // Guides rather than blank indentation: at three levels deep a
-                // tree of spaces stops reading as a tree at all.
-                let guide = if *depth > 0 {
-                    format!("{}└ ", "  ".repeat(depth - 1))
-                } else {
-                    String::new()
-                };
-                let title = if Some(row) == selected {
-                    Style::new().fg(TEXT).bold()
-                } else {
-                    Style::new().fg(MUTED)
-                };
-                ListItem::new(Line::from(vec![
-                    Span::styled(guide, Style::new().fg(FAINT)),
-                    Span::styled(format!("{mark} "), Style::new().fg(colour)),
-                    Span::styled(node.title.clone(), title),
-                ]))
-            })
-            .collect();
+    fn draw_transcript(&self, frame: &mut Frame, area: Rect) {
+        let mut lines: Vec<Line> = Vec::new();
+        for entry in &self.entries {
+            match entry {
+                Entry::User(text) => {
+                    lines.push(Line::from(""));
+                    for (i, part) in text.lines().enumerate() {
+                        lines.push(Line::from(vec![
+                            Span::styled(if i == 0 { "› " } else { "  " }, Style::new().fg(TEXT)),
+                            Span::styled(part.to_string(), Style::new().fg(TEXT).bold()),
+                        ]));
+                    }
+                }
+                Entry::Assistant(text) => {
+                    lines.push(Line::from(""));
+                    for part in text.lines() {
+                        lines.push(Line::from(Span::styled(
+                            part.to_string(),
+                            Style::new().fg(TEXT),
+                        )));
+                    }
+                }
+                Entry::Tool {
+                    name,
+                    detail,
+                    state,
+                } => {
+                    let (mark, colour) = match state {
+                        ToolState::Running => {
+                            (SPINNER[(self.spinner / 3) % SPINNER.len()], RUNNING)
+                        }
+                        ToolState::Done { truncated: false } => ("✓", DONE),
+                        ToolState::Done { truncated: true } => ("✓", RUNNING),
+                        ToolState::Refused(_) => ("✗", FAILED),
+                    };
+                    let mut spans = vec![
+                        Span::styled(format!("  {mark} "), Style::new().fg(colour)),
+                        Span::styled(name.clone(), Style::new().fg(MUTED)),
+                        Span::styled(format!("  {detail}"), Style::new().fg(FAINT)),
+                    ];
+                    if let ToolState::Done { truncated: true } = state {
+                        spans.push(Span::styled(" (truncated)", Style::new().fg(FAINT)));
+                    }
+                    lines.push(Line::from(spans));
+                    // The reason goes on its own line: a refusal the user can't
+                    // read is a refusal they report as the agent "doing
+                    // nothing".
+                    if let ToolState::Refused(reason) = state {
+                        lines.push(Line::from(Span::styled(
+                            format!("      {reason}"),
+                            Style::new().fg(FAILED),
+                        )));
+                    }
+                }
+                Entry::Note(text) => lines.push(Line::from(Span::styled(
+                    format!("  {text}"),
+                    Style::new().fg(FAINT),
+                ))),
+            }
+        }
 
-        frame.render_stateful_widget(
-            List::new(items)
-                .block(pane(" sessions ", false))
-                // A left bar plus a brighter title, instead of inverting the
-                // whole row: inversion fights every colour already in the row,
-                // and the status marks are the point of the row.
-                .highlight_symbol("▏")
-                .highlight_style(Style::new().fg(ACCENT)),
-            area,
-            &mut self.selection,
-        );
-    }
+        // Pin to the bottom unless the user has scrolled up. Counting wrapped
+        // rows exactly would mean redoing the wrapper's arithmetic; this
+        // overshoots and lets the widget clamp, which never hides the newest
+        // line — the one that matters while a turn is streaming.
+        let total = lines.len() as u16;
+        let max_offset = total.saturating_sub(area.height);
+        let offset = max_offset.saturating_sub(self.scrollback.min(max_offset));
 
-    fn draw_detail(&mut self, frame: &mut Frame, area: Rect) {
         frame.render_widget(
-            Paragraph::new(self.detail_lines())
+            Paragraph::new(lines)
                 .wrap(Wrap { trim: false })
-                .block(pane(" session ", false)),
+                .scroll((offset, 0)),
             area,
         );
     }
 
     fn draw_input(&mut self, frame: &mut Frame, area: Rect) {
-        let prompting = self.mode == Mode::Prompt;
-        let title = if prompting {
-            " new session · Enter to create · Esc to cancel "
+        let (title, colour) = if self.busy() {
+            (
+                format!(" {} working ", SPINNER[(self.spinner / 3) % SPINNER.len()]),
+                RUNNING,
+            )
         } else {
-            " j/k move · i new · r reload · q quit "
+            (" ask ".to_string(), FAINT)
         };
-        self.input.set_block(pane(title, prompting));
-        self.input.set_cursor_style(if prompting {
-            Style::new().fg(BACKGROUND).bg(ACCENT)
-        } else {
-            // Hide the caret when the pane isn't focused, so there aren't
-            // two things on screen claiming to be where you are.
-            Style::new()
-        });
+        self.input.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::new().fg(colour))
+                .title(Span::styled(title, Style::new().fg(colour))),
+        );
         frame.render_widget(&self.input, area);
-    }
-
-    /// The right-hand pane: what this session is, what it concluded, and what
-    /// it inherited.
-    ///
-    /// Built as styled lines rather than one string so labels can recede and
-    /// content can lead. In a pane of flat text the eye reads the labels
-    /// first, which are the least interesting thing on screen.
-    fn detail_lines(&self) -> Text<'static> {
-        let Some((index, _)) = self.selection.selected().and_then(|i| self.rows.get(i)) else {
-            return Text::from(
-                self.log
-                    .iter()
-                    .map(|line| Line::styled(line.clone(), Style::new().fg(MUTED)))
-                    .collect::<Vec<_>>(),
-            );
-        };
-        let node = &self.nodes[*index];
-
-        let field = |name: &'static str, value: String| {
-            Line::from(vec![
-                Span::styled(format!("{name:<8}"), Style::new().fg(FAINT)),
-                Span::styled(value, Style::new().fg(MUTED)),
-            ])
-        };
-        let heading = |text: &'static str| Line::styled(text, Style::new().fg(ACCENT).bold());
-
-        let status_colour = match node.status {
-            SessionStatus::Done => DONE,
-            SessionStatus::Failed => FAILED,
-            SessionStatus::Running => RUNNING,
-            SessionStatus::Pending => FAINT,
-        };
-
-        let mut lines = vec![
-            Line::styled(node.title.clone(), Style::new().fg(TEXT).bold()),
-            Line::from(vec![
-                Span::styled(format!("{:<8}", "status"), Style::new().fg(FAINT)),
-                Span::styled(
-                    node.status.as_str().to_string(),
-                    Style::new().fg(status_colour),
-                ),
-            ]),
-            field("model", node.model.clone().unwrap_or_else(|| "—".into())),
-            field("id", node.id.clone()),
-        ];
-
-        if let Some(summary) = &node.summary {
-            lines.push(Line::raw(""));
-            lines.push(heading("summary"));
-            for line in summary.lines() {
-                lines.push(Line::styled(line.to_string(), Style::new().fg(TEXT)));
-            }
-        }
-
-        lines.push(Line::raw(""));
-        match ContextBuilder::new(&self.store).build(&node.id) {
-            Ok(ctx) if !ctx.is_empty() => {
-                lines.push(heading("inherited"));
-                for item in &ctx.items {
-                    let colour = if item.outcome == SessionStatus::Failed {
-                        FAILED
-                    } else {
-                        DONE
-                    };
-                    lines.push(Line::from(vec![
-                        Span::styled(
-                            format!("[{}] ", item.outcome.as_str()),
-                            Style::new().fg(colour),
-                        ),
-                        Span::styled(item.title.clone(), Style::new().fg(TEXT)),
-                    ]));
-                    lines.push(Line::styled(
-                        format!("  {}", item.text.trim()),
-                        Style::new().fg(MUTED),
-                    ));
-                }
-                if ctx.dropped > 0 {
-                    lines.push(Line::styled(
-                        format!(
-                            "  ({} older session(s) dropped for context budget)",
-                            ctx.dropped
-                        ),
-                        Style::new().fg(FAINT),
-                    ));
-                }
-            }
-            Ok(_) => lines.push(Line::styled(
-                "inherited: nothing (root session)",
-                Style::new().fg(FAINT),
-            )),
-            // Drawing must not fail on a store hiccup — show it in the pane.
-            Err(e) => lines.push(Line::styled(
-                format!("inherited: unavailable ({e})"),
-                Style::new().fg(FAILED),
-            )),
-        }
-
-        if !self.log.is_empty() {
-            lines.push(Line::raw(""));
-            for line in &self.log {
-                lines.push(Line::styled(line.clone(), Style::new().fg(FAINT)));
-            }
-        }
-        Text::from(lines)
     }
 }
 
-// A palette, rather than the terminal's sixteen.
-//
-// Indexed ANSI colours mean the app looks different in every terminal and
-// fights whatever theme the user chose. These are fixed, low-saturation, and
-// picked to sit on a dark background without any of them shouting: the only
-// saturated colour is the accent, and it is spent on exactly two things —
-// what is selected, and what a heading is.
-const ACCENT: Color = Color::Rgb(0xE0, 0x7A, 0x5F);
-const TEXT: Color = Color::Rgb(0xED, 0xF0, 0xF3);
-const MUTED: Color = Color::Rgb(0x94, 0x9B, 0xA6);
+/// The first eight characters of an id — enough to tell two apart without a
+/// uuid across the header.
+fn short(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
+fn system_prompt() -> String {
+    "You are Cymose Code, a coding agent working inside the user's project. \
+     Use the tools to read before you change anything, and prefer small, \
+     verifiable edits. When a tool is refused, say what you would have done \
+     and carry on without it rather than repeating the call. Answer briefly: \
+     the user is reading this in a terminal beside their code."
+        .to_string()
+}
+
+// Fixed values rather than the terminal's ANSI slots, so the meaning of a
+// colour doesn't change with somebody's theme — and no orange: the brand
+// dropped it, and a client still using it looks like a different product.
+const TEXT: Color = Color::Rgb(0xF2, 0xF4, 0xF6);
+const MUTED: Color = Color::Rgb(0x9A, 0xA1, 0xAC);
 const FAINT: Color = Color::Rgb(0x5A, 0x61, 0x6C);
 const DONE: Color = Color::Rgb(0x7F, 0xB0, 0x8A);
 const FAILED: Color = Color::Rgb(0xD1, 0x76, 0x76);
-const RUNNING: Color = Color::Rgb(0xD6, 0xA8, 0x63);
-const BACKGROUND: Color = Color::Rgb(0x0D, 0x0F, 0x12);
-
-/// A pane border. Rounded, and dimmed unless it has focus — a screen of equally
-/// bright boxes gives the eye nowhere to start.
-fn pane(title: &'static str, focused: bool) -> Block<'static> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(if focused { ACCENT } else { FAINT }))
-        .title(Span::styled(
-            title,
-            Style::new().fg(if focused { ACCENT } else { MUTED }),
-        ))
-}
-
-/// Depth-first display order: each node followed by its children.
-fn flatten(nodes: &[TreeNode], parent: Option<&str>, depth: usize) -> Vec<(usize, usize)> {
-    let mut out = Vec::new();
-    for (index, node) in nodes.iter().enumerate() {
-        if node.parent_id.as_deref() != parent {
-            continue;
-        }
-        out.push((index, depth));
-        out.extend(flatten(nodes, Some(&node.id), depth + 1));
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-
-    fn node(id: &str, parent: Option<&str>) -> TreeNode {
-        TreeNode {
-            id: id.into(),
-            parent_id: parent.map(str::to_string),
-            title: id.into(),
-            status: SessionStatus::Done,
-            model: None,
-            summary: None,
-            created_at: Utc::now(),
-        }
-    }
-
-    #[test]
-    fn children_follow_their_parent_and_are_indented() {
-        let nodes = vec![
-            node("root", None),
-            node("child", Some("root")),
-            node("grandchild", Some("child")),
-            node("other-root", None),
-        ];
-        let rows = flatten(&nodes, None, 0);
-        let order: Vec<_> = rows
-            .iter()
-            .map(|(i, d)| (nodes[*i].id.as_str(), *d))
-            .collect();
-        assert_eq!(
-            order,
-            vec![
-                ("root", 0),
-                ("child", 1),
-                ("grandchild", 2),
-                ("other-root", 0)
-            ]
-        );
-    }
-
-    #[test]
-    fn an_orphaned_node_is_not_drawn_twice_or_lost_in_a_loop() {
-        // parent_id pointing at a session from another workspace: it must not
-        // appear at the root, and it must not send the walk into a loop.
-        let nodes = vec![node("root", None), node("orphan", Some("missing"))];
-        let rows = flatten(&nodes, None, 0);
-        assert_eq!(rows.len(), 1);
-    }
-}
+const RUNNING: Color = Color::Rgb(0x8A, 0xA6, 0xC0);
