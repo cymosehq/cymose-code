@@ -14,7 +14,7 @@ Never write into this repo:
 
 - Credentials or project identifiers of any kind — Supabase project refs or
   keys, Cloudflare account/KV/R2 ids, AI Gateway names, provider API keys,
-  billing (Polar/Paddle) product ids, tokens or webhook secrets.
+  billing (Dodo/Polar/Paddle) product ids, tokens or webhook secrets.
 - Server-side business logic copied out of the API: credit pricing and daily
   spend ceilings, per-device rate-limit algorithms, free-tier fuse thresholds,
   the provider mix behind a model name, prompt text used for server-side

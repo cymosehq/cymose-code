@@ -90,8 +90,8 @@ mod tests {
     fn defaults_are_a_usable_configuration() {
         let c = Config::default();
         assert!(c.api.base_url.starts_with("https://"));
-        // No account by default. 0.1 is BYOK, and a default token would mean
-        // the binary talks to us before anyone asked it to.
+        // No token by default: `cymose login` writes one, and shipping a
+        // default would mean the binary talks to us before anyone asked it to.
         assert!(c.api.token.is_none());
         assert_eq!(c.router.chain.first().unwrap(), "claude-sonnet");
     }

@@ -86,7 +86,10 @@ async fn main() -> Result<()> {
             // Before the terminal goes into raw mode: an error printed from
             // inside the alternate screen is unreadable, and "you need a plan"
             // is exactly the message that must not arrive that way.
-            let (client, account) = authenticated(&root).await?;
+            let (account_client, account) = authenticated(&root).await?;
+            // The plan gate has passed; now decide whose credit the turns come
+            // out of. See `turn_client`.
+            let client = turn_client(account_client);
             let store = Store::open(&store_path)?;
             let workspace = store
                 .workspace_for_path(&root)?
@@ -173,9 +176,10 @@ async fn run(command: Command, store_path: &std::path::Path) -> Result<()> {
             );
             let inherited = ContextBuilder::new(&store).build(&session.id)?;
             print!("{}", inherited.render());
-            // Turns need the inference route, which the API doesn't serve yet.
-            // Saying so beats a spinner that never resolves.
-            println!("\nagent turns are not wired up yet — see docs/api-contract.md");
+            // `resume` prints what a session inherits; it does not open a
+            // transcript. Turns happen in the TUI, so say where to go rather
+            // than leaving the reader waiting for a prompt that never comes.
+            println!("\nRun `cymose` in this directory to continue the session.");
         }
 
         Command::List => {
@@ -196,8 +200,16 @@ async fn run(command: Command, store_path: &std::path::Path) -> Result<()> {
         Command::Promote { id } => {
             let session = store.session(&id)?;
             let config = Config::load(Some(&root))?;
+            // Sign-in is done and `Client::promote` exists; what is missing is
+            // on the other side. `/v1/promote` promotes a *web* node: it takes
+            // a workspace id and reads that workspace's messages back out of
+            // the server. A Code session has neither, so there is nothing for
+            // it to post yet — the route has to learn to accept an outcome
+            // before this can be wired.
             anyhow::bail!(
-                "promote of {} would post to {}/v1/promote, which needs `cymose login` (not implemented yet)",
+                "promote of {} has nowhere to go yet: {}/v1/promote promotes a Cymose Web node, \
+                 and a local session isn't one. Sending a session's outcome up is the next \
+                 milestone — see docs/api-contract.md.",
                 session.id,
                 config.api.base_url
             );
@@ -274,10 +286,27 @@ fn client_with(config: &Config, token: String) -> Client {
         base_url: config.api.base_url.clone(),
         token,
         // Device identity exists for the per-device rate limits on the metered
-        // routes. The CLI is one device per machine, and the store path is the
-        // closest thing to a stable per-machine id we already have.
+        // routes. One value for every CLI install is deliberate for now: the
+        // account behind the bearer token is what those limits key on for a
+        // paid plan, and inventing a per-machine id here would be a second
+        // identity to keep stable across reinstalls for no gain today.
         device_id: "cymose-cli".into(),
     })
+}
+
+/// Which client actually runs the turns.
+///
+/// The plan is the licence to use the client; the key decides whose credit the
+/// tokens come out of. With `OPENROUTER_API_KEY` set, turns go straight to
+/// OpenRouter on the user's own account and nothing of ours is in the path —
+/// which is also why the summariser has no server prompt to call in that mode
+/// (see docs/spec.md §8). Without it, they go through the Cymose backend on
+/// the account that has already been checked.
+fn turn_client(account_client: Client) -> Client {
+    match std::env::var("OPENROUTER_API_KEY") {
+        Ok(key) if !key.trim().is_empty() => Client::openrouter(key.trim()),
+        _ => account_client,
+    }
 }
 
 /// Sign-in plus the plan gate, in the order the user experiences them.

@@ -313,16 +313,6 @@ impl SessionSummary {
     }
 }
 
-/// Where a turn is sent.
-///
-/// 0.1 is BYOK only: the user's own OpenRouter key, straight to OpenRouter,
-/// with nothing of ours in the path. That is the honest shape for a beta —
-/// no account to make, no billing to trust, no service to be down, and the
-/// user can see exactly what each turn costs on their own dashboard.
-///
-/// The Cymose backend is the later half: it exists (see the API's
-/// `/v1/code/*`) and is what Cymose Web syncs through, but it is not wired up
-/// here yet and nothing in this build depends on it.
 /// The signed-in account, as `GET /v1/credits` describes it.
 ///
 /// Deliberately the same payload the web app reads. A second endpoint that
@@ -438,12 +428,22 @@ impl SyncTree {
     }
 }
 
+/// Where a turn is sent.
+///
+/// Cymose is the default: the account that has already passed the plan gate
+/// pays for the turn, and the server owns the summariser's prompt so it can be
+/// improved without a client release.
+///
+/// OpenRouter is the second path. With `OPENROUTER_API_KEY` set, turns go
+/// straight to the user's own OpenRouter account with nothing of ours in the
+/// path — the plan is still the licence to use the client, the key only
+/// decides whose credit the tokens come out of. Nothing of ours in the path
+/// also means no server-side summariser to call; see docs/spec.md §8.
 #[derive(Debug, Clone)]
 pub enum Backend {
     OpenRouter {
         api_key: String,
     },
-    /// Not usable yet — see [`Client::inference`].
     Cymose {
         base_url: String,
         token: String,
@@ -495,7 +495,10 @@ impl Client {
         }
         match &self.backend {
             Backend::OpenRouter { api_key } => self.openrouter_inference(req, api_key).await,
-            Backend::Cymose { .. } => Err(Error::NotImplemented("the Cymose backend")),
+            // `stream: false` is a documented mode of the route, which is what
+            // makes the contract testable with curl — so this sends it rather
+            // than refusing a shape the server accepts.
+            Backend::Cymose { .. } => self.post("/v1/code/inference", req).await,
         }
     }
 
@@ -672,9 +675,11 @@ impl Client {
     /// a failure here delays a summary, it doesn't block the agent.
     pub async fn summarize(&self, req: &SummarizeRequest) -> Result<SessionSummary> {
         match &self.backend {
-            // BYOK summarising asks the model for the structured shape
-            // directly. The prompt lives in [`crate::summarize`] in this case
-            // rather than on a server we aren't talking to.
+            // BYOK puts no server in the path, so there is no server-side
+            // prompt to call. Carrying one here instead would mean two
+            // implementations that can disagree about what a summary is —
+            // still an open question, deliberately not answered by guessing.
+            // See docs/spec.md §8.
             Backend::OpenRouter { .. } => Err(Error::NotImplemented("BYOK summaries")),
             Backend::Cymose { .. } => self.post("/v1/code/summarize", req).await,
         }
@@ -704,10 +709,9 @@ impl Client {
     /// revisions, tombstones and merge rules, and those should not be designed
     /// after the easy half has already shipped.
     ///
-    /// Unreachable in 0.1 for the same reason [`Client::promote`] is: this
-    /// needs an account, and 0.1 sends every turn straight to OpenRouter on
-    /// the user's own key. The route exists on the API and the shape is pinned
-    /// down here so the client half is a wiring job rather than a design one.
+    /// Needs the Cymose backend: there is no tree to read on a bare provider
+    /// key. A client built from `OPENROUTER_API_KEY` alone gets
+    /// [`Error::NotImplemented`] from [`Client::get`].
     pub async fn sync_tree(&self) -> Result<SyncTree> {
         let tree: SyncTree = self.get("/v1/sync/tree").await?;
         // Three clients read this route on three release schedules. A build
@@ -726,8 +730,9 @@ impl Client {
         Ok(tree)
     }
 
-    /// A read from the Cymose backend. The GET twin of [`Client::post`];
-    /// unreachable in 0.1 for the same reason.
+    /// A read from the Cymose backend. The GET twin of [`Client::post`], and
+    /// refuses the same way on a BYOK client: these routes are the account's,
+    /// and a provider key is not an account.
     async fn get<R: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<R> {
         let Backend::Cymose {
             base_url,
@@ -762,9 +767,9 @@ impl Client {
         })
     }
 
-    /// A call to the Cymose backend. Unreachable in 0.1 — every caller checks
-    /// the backend first — and kept because the routes it targets exist and
-    /// are what the web integration will use.
+    /// A call to the Cymose backend. Refuses on a BYOK client: the routes it
+    /// targets are the account's, and there is no account behind a bare
+    /// provider key.
     async fn post<B: Serialize, R: for<'de> Deserialize<'de>>(
         &self,
         path: &str,
@@ -824,11 +829,18 @@ impl Client {
 }
 
 /// What one non-streamed turn produced.
-#[derive(Debug, Clone, Default, PartialEq)]
+///
+/// Fields the server adds beyond these (`model`, `tokens_used`,
+/// `credits_charged`) are ignored rather than rejected, so it can report more
+/// about a turn without a protocol bump.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct InferenceResult {
+    #[serde(default)]
     pub content: String,
     /// Tools the model wants run. The client runs them — see [`crate::agent`].
+    #[serde(default)]
     pub tool_calls: Vec<ToolCall>,
+    #[serde(default)]
     pub stop_reason: String,
 }
 
@@ -1118,7 +1130,7 @@ mod tests {
 
     #[tokio::test]
     async fn syncing_without_the_cymose_backend_is_unimplemented() {
-        // Same status as promote: the route exists, 0.1 does not dial it.
+        // A provider key is not an account, so there is no tree to read.
         let client = Client::openrouter("sk-or-v1-whatever");
         assert!(matches!(
             client.sync_tree().await,
@@ -1127,24 +1139,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_cymose_backend_is_reported_as_unimplemented() {
-        // 0.1 is BYOK only. The routes exist server-side; nothing here talks
-        // to them yet, and pretending otherwise would fail at the first turn.
-        let client = Client::new(Backend::Cymose {
-            base_url: "https://example.invalid".into(),
-            token: "t".into(),
-            device_id: "device".into(),
-        });
-        let req = InferenceRequest {
+    async fn summarising_without_the_cymose_backend_is_unimplemented() {
+        // The summariser's prompt is the server's. On a bare provider key
+        // there is no server in the path, so this refuses rather than
+        // inventing a second prompt — see docs/spec.md §8.
+        let client = Client::openrouter("sk-or-v1-whatever");
+        let req = SummarizeRequest {
             session_id: "s".into(),
-            model: "claude-sonnet".into(),
-            messages: vec![ApiMessage::text("user", "hi")],
-            tools: vec![],
-            max_tokens: 128,
-            stream: false,
+            task: "t".into(),
+            transcript: vec![ApiMessage::text("user", "hi")],
+            outcome: "done".into(),
+            model: None,
         };
         assert!(matches!(
-            client.inference(&req).await,
+            client.summarize(&req).await,
             Err(Error::NotImplemented(_))
         ));
     }

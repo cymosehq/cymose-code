@@ -36,12 +36,10 @@ What that means concretely:
   gone can have it gone in a minute, and we know that. It's there for the
   honest majority, and to state the deal plainly — the client is open, the
   service behind it is paid for.
-- **[Cymose Web](https://cymose.dev) integration reads only, and is optional.**
-  `cymose sync` prints the tree you planned in the browser — titles, promoted
-  conclusions, pinned notes. It is the one thing here that talks to a server of
-  ours, it does nothing until you put a token in `config.toml`, and it never
-  writes anything back. Turns still go straight to OpenRouter on your own key
-  whether or not you ever set it.
+- **[Cymose Web](https://cymose.dev) integration reads only.** `cymose sync`
+  prints the tree you planned in the browser — titles, promoted conclusions,
+  pinned notes. It never writes anything back, and it reads the tree from your
+  account whether or not turns are going through us.
 - **`promote` back to a conclusion node, and syncing sessions between machines,
   come later.** The write direction needs revisions and merge rules; reading is
   most of the value and has none of that risk.
@@ -111,19 +109,20 @@ architect  = "claude-sonnet"
 | | |
 |---|---|
 | Session graph, summary inheritance, SQLite store | **works** |
-| TUI: tree, session detail, creating sessions | **works** |
+| TUI: transcript, tools running, creating sessions | **works** |
 | Tools — read, write, search, run (path jail, command allowlist) | **works** |
 | Model chain and failover policy | **works** |
-| One turn, BYOK, non-streamed | **works** |
-| `cymose sync` — read the Web tree | **works** (needs a token; read-only) |
-| Streaming turns | not yet |
-| The agent loop end to end (`cymose new` runs a task by itself) | **not yet** |
-| `diff`, `promote`, VS Code panel actions | not yet |
-| Cymose Web sync | later milestone |
+| Streaming turns, on both backends | **works** |
+| The agent loop — a prompt runs tools until it's done | **works** |
+| `cymose sync` — read the Web tree | **works** (read-only) |
+| Summaries on your own OpenRouter key | not yet (the prompt is the server's) |
+| `diff` — needs session artifacts, which aren't recorded yet | not yet |
+| `promote` — needs a server route that accepts a session | not yet |
+| VS Code panel actions (prompt, cancel, diff) | not yet |
 
-If you install this expecting to hand it a task and walk away, you will be
-disappointed today. If you want to look at how a session graph is built and
-tell us where it's wrong, now is a good time.
+The agent loop runs in the TUI. The VS Code extension can browse the session
+tree but cannot yet drive a turn, so the editor half is genuinely behind the
+terminal half today.
 
 ## Install
 
@@ -144,9 +143,15 @@ irm https://cymose.dev/install.ps1 | iex
 Then:
 
 ```sh
-export OPENROUTER_API_KEY=sk-or-v1-...
+cymose login           # paste the token from your account page
 cymose init            # link this directory to a workspace
 cymose                 # open the TUI
+```
+
+Optionally, to spend your own OpenRouter credit instead of the plan's:
+
+```sh
+export OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
 **VS Code:** search for **Cymose Code** in the Extensions view (`Ctrl`/`Cmd` +
@@ -168,15 +173,21 @@ Releasing, and how the Marketplace publish works: [RELEASING.md](RELEASING.md).
 ## CLI
 
 ```
+cymose login                   sign in with the token from your account page
+cymose logout                  forget the stored token
+cymose whoami                  which plan you're on, and what's left of it
 cymose init                    link the current directory to a workspace
 cymose new "add redis cache"   start a session
 cymose new --from <id> "..."   start one that inherits a specific session
-cymose resume <id>             continue a session
+cymose resume <id>             show what a session inherits
 cymose list                    show the session tree
-cymose diff <id> <id>          compare two approaches
+cymose sync                    read the tree you planned in Cymose Web
+cymose diff <id> <id>          compare two approaches (later milestone)
 cymose promote <id>            send the outcome to Cymose Web (later milestone)
 cymose sidecar                 JSON-RPC over stdio (used by the extension)
 ```
+
+Bare `cymose` opens the TUI, which is where turns actually run.
 
 ## VS Code
 
@@ -192,20 +203,20 @@ branches, conclusions. Cymose Code is where those turn into diffs. Mark a node
 as a code task and it opens as a session here; `promote` sends the result back
 as a conclusion node. Plan on one screen, implementation on the other.
 
-None of that is in 0.1. Today the two are separate products: Cymose Code runs
-on your own key, locally, and knows nothing about the web canvas. Linking them
-— a canvas node that opens as a coding session, and `promote` sending the diff
-back as a conclusion — is the next milestone.
+Half of that is in 0.1. `cymose sync` reads the tree you planned in the
+browser, so the plan is at least visible from here. The other half — a canvas
+node that opens as a coding session, and `promote` sending the diff back as a
+conclusion — is the next milestone.
 
 ## Roadmap
 
 | Version | Scope |
 |---------|-------|
-| **v0.1 beta (here)** | BYOK only. Session store, TUI, tools, router, context inheritance. Agent loop and streaming still landing |
+| **v0.1 beta (here)** | Account + plan gate, BYOK as the second path. Session store, TUI, tools, router, context inheritance, agent loop, streaming, read-only `cymose sync` |
 | v0.2 | VS Code: session tree, agent panel, native diff, sidecar transport, CodeLens |
-| v0.3 | Sync: Web ↔ Terminal ↔ VS Code, promote from both clients, `explore` visible everywhere |
+| v0.3 | `promote` from both clients, and session artifacts so `cymose diff` works |
 | v0.4 | Code graph via tree-sitter: symbols and call/import edges feeding the context builder |
-| v0.5 | Cymose Web sync from every client, `explore` visible everywhere |
+| v0.5 | Write-direction sync between Web, Terminal and VS Code; `explore` visible everywhere |
 
 ## Contributing
 

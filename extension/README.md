@@ -1,8 +1,9 @@
 # Cymose Code for VS Code
 
-> **0.1 beta.** Runs on your own [OpenRouter](https://openrouter.ai) key
-> (`OPENROUTER_API_KEY`) — there is no Cymose account and no billing in the
-> path of a turn. Integration with Cymose Web comes in a later milestone.
+> **0.1 beta.** Needs a Cymose account on a paid plan (Pro or Max) — the same
+> subscription that covers the web canvas. Setting `OPENROUTER_API_KEY` sends
+> turns to your own [OpenRouter](https://openrouter.ai) account instead of
+> spending plan credits; the plan is still what licenses the client.
 > The code in this repository is written by an AI agent; see
 > [the note in the root README](../README.md#this-code-was-written-by-an-ai).
 
@@ -29,8 +30,11 @@ the edit cycle. `cymose.corePath` overrides that if you want a specific build.
 - Showing what a session inherits, in the output channel
 
 Not yet: running a turn, native diff between two sessions, CodeLens, promote.
-Those are blocked on the core's agent loop and the API's inference route — see
-[../docs/api-contract.md](../docs/api-contract.md).
+The agent loop and the inference route both exist and the terminal client runs
+turns on them; what is missing here is the sidecar half — `session.prompt`,
+`session.cancel` and `session.diff` still answer "not implemented in this
+build", because streaming a turn needs the sidecar to push notifications from
+another task. See [../docs/sidecar-protocol.md](../docs/sidecar-protocol.md).
 
 ## Packaging
 

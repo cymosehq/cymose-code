@@ -33,13 +33,23 @@ recognise.
 | `session.tree` | — | nodes with id, title, status, parent |
 | `session.new` | title, parent (optional) | session id |
 | `session.resume` | id | session id, inherited context summary |
+| `model.list` | — | chain, active model |
+| `shutdown` | — | — |
+
+Documented, and answering `-32004` until they are built:
+
+| Method | Params | Result |
+|--------|--------|--------|
 | `session.prompt` | id, text | accepted; output arrives as notifications |
 | `session.cancel` | id | — |
 | `session.diff` | id_a, id_b | unified diff per file |
 | `session.promote` | id | Web node id |
-| `model.list` | — | chain, active model |
 | `model.switch` | model | active model |
-| `shutdown` | — | — |
+
+`session.prompt` is the one that matters: the core runs turns already, but this
+loop is synchronous, and streaming a turn means pushing notifications from
+another task. That is the change this becomes async for. Until then the
+terminal client is the only one that can run a turn.
 
 ## Notifications
 

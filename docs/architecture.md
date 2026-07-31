@@ -30,9 +30,11 @@ handshake carries a protocol version for that reason.
 | `store` | SQLite: workspaces, sessions, messages, summaries, artifacts |
 | `context` | Builds a session's starting context from ancestor summaries |
 | `router` | Model chain, failover policy, per-task pins |
-| `agent` | The tool loop: read_file, write_file, run_command, search |
+| `agent` | The tools themselves: read_file, write_file, run_command, search |
+| `runner` | The agent loop: stream a turn, run the tools it asks for, repeat |
 | `summarize` | Turns a finished session into the summary its children inherit |
 | `api` | Client for the Cymose API (auth, inference, sync) |
+| `auth` | The stored token — `~/.config/cymose/credentials.toml`, mode `0600` |
 | `config` | `~/.config/cymose/config.toml` plus per-workspace overrides |
 
 Rules that keep the split honest:

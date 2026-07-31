@@ -1,18 +1,27 @@
 # Backends
 
-## 0.1 talks to OpenRouter, not to us
+## Two paths, and which one a turn takes
 
-The 0.1 beta is BYOK: `api::Backend::OpenRouter` sends an OpenAI-compatible
-chat completion straight to `openrouter.ai` with the user's own key. Nothing of
-ours is in the path of a turn — no account, no metering, no service to be down
-— and the translation between this crate's wire format and OpenAI's lives in
-`api::openai_message` / `api::parse_openai_completion`.
+**Cymose is the default.** `api::Backend::Cymose` sends the turn to the API on
+the account that has already passed the plan gate. This is what the whole of
+this document describes.
 
-The rest of this document describes the **Cymose backend**: implemented on the
-API, not switched on here, and what the Cymose Web integration will run on.
-`api::Backend::Cymose` returns `Error::NotImplemented` in this build.
+**OpenRouter is the second path.** With `OPENROUTER_API_KEY` set,
+`api::Backend::OpenRouter` sends an OpenAI-compatible chat completion straight
+to `openrouter.ai` on the user's own key, and nothing of ours is in the path of
+that turn. The translation between this crate's wire format and OpenAI's lives
+in `api::openai_message` / `api::parse_openai_completion`.
 
-## The Cymose backend (later milestone)
+The plan is still required either way: the subscription is the licence to use
+the client, the key only decides whose credit the tokens come out of. See
+[spec.md](spec.md) §7 for why this reversed twice and why it is settled.
+
+One consequence to know about: with no server in the path there is no
+server-side summariser to call, so `Client::summarize` returns
+`Error::NotImplemented` on the OpenRouter backend. Where that prompt should
+live under BYOK is open — spec.md §8.
+
+## The Cymose backend
 
 The server is proprietary and lives in a separate repository. What follows is
 the wire contract only: what this client sends and what it expects back. How
@@ -45,8 +54,10 @@ into a `500`. A `429` that arrives as a `500` costs the user a working fallback.
 
 ## Auth
 
-`cymose login` obtains a user token and stores it in the OS keychain, falling
-back to `~/.config/cymose/credentials.json` at mode `0600`. Every call carries:
+`cymose login` takes a user token and stores it in
+`~/.config/cymose/credentials.toml` at mode `0600` — never in `config.toml`,
+which is meant to be readable, diffable and sometimes committed. Every call
+carries:
 
 ```
 Authorization: Bearer <token>
@@ -65,12 +76,19 @@ written to the session store, and never included in a bug report — see
 |-------|---------|-------|
 | `POST /v1/code/inference` | every agent turn | SSE stream |
 | `POST /v1/code/summarize` | the summariser, when a session ends | synchronous JSON |
-| `POST /v1/promote` | `cymose promote` — outcome to a Web conclusion node | synchronous JSON |
+| `GET /v1/credits` | the plan gate every entry point runs | synchronous JSON |
 | `GET /v1/sync/tree` | reading the Web tree into a local store | synchronous JSON |
+| `POST /v1/promote` | not yet reachable from here — see below | synchronous JSON |
 
-`/v1/code/*` is implemented on the API. Both routes accept `stream: false` and
-answer with one JSON body, which is what `api::Client::inference` sends and
-what makes the contract testable with `curl`.
+Both `/v1/code/*` routes accept `stream: false` and answer with one JSON body,
+which is what `api::Client::inference` sends and what makes the contract
+testable with `curl`.
+
+`/v1/promote` promotes a **Cymose Web** node: it takes a `workspace_id` and
+reads that workspace's messages back out of the server. A local Code session is
+neither, so `cymose promote` has nothing to post yet. Sending a session's
+outcome up needs the route to learn to accept one, and that is a server-side
+change, not a client one.
 
 **Streaming works.** `api::Client::inference_stream` reads SSE and hands the
 caller one event at a time; a turn takes tens of seconds and a client that
@@ -203,6 +221,37 @@ Either way the client reads `provider_status` and acts on it:
 `402`, `403` and `451` messages are shown as sent. The client does not
 paraphrase them and must not try to reconstruct why the server said no.
 
+### `GET /v1/credits`
+
+Who the caller is, what they pay for, and what is left. No body; the bearer
+token identifies the account. This is the gate every entry point runs before
+doing anything expensive — `api::Client::account`.
+
+```jsonc
+{
+  "plan": "pro",              // "free" | "pro" | "max"
+  "is_admin": false,
+  "standard_used": 0,         // integers; the caps are the server's to set
+  "standard_cap": 0,
+  "standard_reset_at": "2026-07-31T00:00:00.000Z",
+  "premium_used": 0,
+  "premium_cap": 0,
+  "premium_extra": 0          // bought on top of the plan's allowance
+}
+```
+
+Values above are placeholders for shape only. What an allowance actually is,
+and what each turn spends against it, is the server's business — the client
+displays these numbers and never computes them.
+
+The server sends more fields than this; a client reads the ones it needs and
+ignores the rest. Cymose Code requires `plan` to be `pro` or `max` (or
+`is_admin`) — there is no free tier for Code, deliberately. See
+[spec.md](spec.md) §7.
+
+The route also answers `POST`, which is how the web app has always called it.
+`GET` is what this client sends, because it is a read.
+
 ### `GET /v1/sync/tree`
 
 The account's whole tree, in the shape every client is expected to store it in.
@@ -250,6 +299,6 @@ store is most of what synchronisation is for. Writing back needs revisions,
 tombstones and merge rules, and designing those under the pressure of having
 already shipped the easy half is how a sync protocol goes bad.
 
-This route needs a Cymose account. It is not part of a turn: 0.1 sends
-inference straight to OpenRouter on the user's own key regardless of whether
-anything here is ever called.
+This route needs a Cymose account, and is not part of a turn — a client running
+turns on its own OpenRouter key still reads its tree from here, because the
+tree belongs to the account rather than to the key.
