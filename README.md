@@ -2,7 +2,7 @@
 
 An agentic coding tool that treats work as a **graph of short sessions** instead
 of one endless chat, and routes across **several models** so a single provider's
-rate limit doesn't stop your day. — [cymose.dev/code](https://cymose.dev/code)
+rate limit doesn't stop your day. — [cymose.app/code](https://cymose.app/code)
 
 Two clients, one core:
 
@@ -36,7 +36,7 @@ What that means concretely:
   gone can have it gone in a minute, and we know that. It's there for the
   honest majority, and to state the deal plainly — the client is open, the
   service behind it is paid for.
-- **[Cymose Web](https://cymose.dev) integration reads only.** `cymose sync`
+- **[Cymose Web](https://cymose.app) integration reads only.** `cymose sync`
   prints the tree you planned in the browser — titles, promoted conclusions,
   pinned notes. It never writes anything back, and it reads the tree from your
   account whether or not turns are going through us.
@@ -129,7 +129,7 @@ terminal half today.
 **Terminal — one line, no toolchain:**
 
 ```sh
-curl -fsSL https://cymose.dev/install.sh | sh
+curl -fsSL https://cymose.app/install.sh | sh
 ```
 
 It downloads the release binary for your platform, checks it against the
@@ -137,7 +137,7 @@ published `SHA256SUMS`, and puts it in `~/.local/bin` (override with
 `CYMOSE_INSTALL_DIR`). Windows PowerShell:
 
 ```powershell
-irm https://cymose.dev/install.ps1 | iex
+irm https://cymose.app/install.ps1 | iex
 ```
 
 Then:

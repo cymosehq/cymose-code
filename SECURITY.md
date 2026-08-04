@@ -2,7 +2,7 @@
 
 ## Reporting
 
-Email **security@cymose.dev** with a description, affected version, and
+Email **security@cymose.app** with a description, affected version, and
 reproduction steps. We aim to acknowledge within three working days.
 
 Please report privately first — including anything published in this repository

@@ -527,7 +527,7 @@ impl Client {
                     .http
                     .post(OPENROUTER_URL)
                     .bearer_auth(api_key)
-                    .header("HTTP-Referer", "https://cymose.dev")
+                    .header("HTTP-Referer", "https://cymose.app")
                     .header("X-Title", "Cymose Code")
                     .json(&body)
                     .send()
@@ -645,7 +645,7 @@ impl Client {
             .bearer_auth(api_key)
             // Attribution on OpenRouter's public leaderboard. Optional, free,
             // and the only thing we add to a BYOK request.
-            .header("HTTP-Referer", "https://cymose.dev")
+            .header("HTTP-Referer", "https://cymose.app")
             .header("X-Title", "Cymose Code")
             .json(&body)
             .send()

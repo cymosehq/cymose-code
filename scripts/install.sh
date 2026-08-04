@@ -1,7 +1,7 @@
 #!/bin/sh
 # Cymose Code installer.
 #
-#   curl -fsSL https://cymose.dev/install.sh | sh
+#   curl -fsSL https://cymose.app/install.sh | sh
 #
 # Downloads the release binary for this platform, verifies it against the
 # published checksums, and puts it on your PATH. No build toolchain, no cargo,
@@ -26,7 +26,7 @@ need tar
 case "$(uname -s)" in
 	Linux)  os="unknown-linux-gnu" ;;
 	Darwin) os="apple-darwin" ;;
-	*) die "unsupported OS: $(uname -s). On Windows use the PowerShell command on https://cymose.dev/code/terminal" ;;
+	*) die "unsupported OS: $(uname -s). On Windows use the PowerShell command on https://cymose.app/code/terminal" ;;
 esac
 
 case "$(uname -m)" in

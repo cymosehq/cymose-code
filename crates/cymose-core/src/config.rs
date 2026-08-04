@@ -37,7 +37,7 @@ pub struct ApiConfig {
 impl Default for ApiConfig {
     fn default() -> Self {
         ApiConfig {
-            base_url: "https://api.cymose.cloud".into(),
+            base_url: "https://api.cymose.app".into(),
             token: None,
         }
     }

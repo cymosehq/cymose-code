@@ -349,7 +349,7 @@ fn upgrade_notice(account: &Account) -> String {
 }
 
 fn landing_url() -> String {
-    std::env::var("CYMOSE_LANDING_URL").unwrap_or_else(|_| "https://cymose.dev".into())
+    std::env::var("CYMOSE_LANDING_URL").unwrap_or_else(|_| "https://cymose.app".into())
 }
 
 /// Reads a token from the terminal.
