@@ -1,6 +1,6 @@
 # Cymose Code installer for Windows.
 #
-#   irm https://cymose.dev/install.ps1 | iex
+#   irm https://cymose.app/install.ps1 | iex
 #
 # Downloads the release binary, verifies it against the published checksums,
 # and puts it on your PATH. No build toolchain, no admin rights.
