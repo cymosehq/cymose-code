@@ -1,0 +1,64 @@
+{
+	"name": "cymose-code",
+	"version": "0.1.0",
+	"description": "Cymose session graph as plugins for coding harnesses. See what you already tried — not another linear chat.",
+	"license": "Apache-2.0",
+	"type": "module",
+	"main": "lib/src/index.js",
+	"types": "lib/src/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./lib/src/index.d.ts",
+			"default": "./lib/src/index.js"
+		},
+		"./dsh": {
+			"types": "./lib/dsh/index.d.ts",
+			"default": "./lib/dsh/index.js"
+		},
+		"./dsh/cordis.patch.yml": "./dsh/cordis.patch.yml",
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"lib/src",
+		"lib/dsh",
+		"dsh/cordis.patch.yml",
+		"LICENSE",
+		"NOTICE"
+	],
+	"dsh": {
+		"bundle": {
+			"patch": "./dsh/cordis.patch.yml"
+		}
+	},
+	"scripts": {
+		"build": "tsc",
+		"prepare": "tsc",
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit"
+	},
+	"keywords": [
+		"cymose",
+		"deepseek-harness",
+		"dsh",
+		"dsh-plugin",
+		"cordis"
+	],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/cymosehq/cymose-code"
+	},
+	"peerDependencies": {
+		"@deepseek-ai/cordis": "^4.0.1",
+		"@deepseek-ai/dsh-tools": "^0.1.0-rc.6"
+	},
+	"dependencies": {
+		"@deepseek-ai/schemastery": "^3.18.1"
+	},
+	"devDependencies": {
+		"@deepseek-ai/cordis": "^4.0.1",
+		"@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+		"@types/node": "^22.15.0",
+		"typescript": "^5.8.0",
+		"vitest": "^3.2.0"
+	}
+}
