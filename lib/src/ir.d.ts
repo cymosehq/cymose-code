@@ -1,7 +1,7 @@
 /** Status of a coding node. `dead-end` is a failed approach children must see. */
 export type NodeStatus = "active" | "done" | "failed" | "dead-end";
-/** Which coding harness owns this node's live session. More hosts later. */
-export type Host = "dsh";
+/** Which coding harness owns this node's live session. */
+export type Host = "dsh" | "mcp";
 /**
  * One short session in the graph. Children inherit summaries, not transcripts.
  * `host_session_id` is the harness session this node maps to, when known.

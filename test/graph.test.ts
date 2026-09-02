@@ -21,6 +21,7 @@ describe("GraphStore", () => {
 		expect(child.parent_id).toBe(root.id);
 		expect(g.load().focused_id).toBe(child.id);
 		expect(g.ancestors(child.id).map((n) => n.title)).toEqual(["auth bug"]);
+		expect(root.host).toBe("dsh");
 	});
 
 	it("keeps a failed ancestor in inherit text", () => {

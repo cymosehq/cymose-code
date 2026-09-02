@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { inheritText, mapForPrompt } from "./inherit.js";
-import { emptyGraph, GRAPH_VERSION, type GraphFile, type GraphNode, type NodeStatus } from "./ir.js";
+import { emptyGraph, GRAPH_VERSION, type GraphFile, type GraphNode, type Host, type NodeStatus } from "./ir.js";
 
 function now(): string {
 	return new Date().toISOString();
@@ -25,7 +25,12 @@ export function parseGraph(data: unknown): GraphFile {
 
 /** In-process graph. Persistence is the host's file tools, not this module. */
 export class GraphStore {
+	readonly host: Host;
 	private data: GraphFile = emptyGraph();
+
+	constructor(host: Host = "dsh") {
+		this.host = host;
+	}
 
 	load(): GraphFile {
 		return this.data;
@@ -89,7 +94,7 @@ export class GraphStore {
 			summary: null,
 			promoted: null,
 			status: "active",
-			host: "dsh",
+			host: this.host,
 			host_session_id: null,
 			created_at: stamp,
 			updated_at: stamp,

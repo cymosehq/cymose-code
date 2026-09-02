@@ -1,8 +1,10 @@
-import { type GraphFile, type GraphNode, type NodeStatus } from "./ir.js";
+import { type GraphFile, type GraphNode, type Host, type NodeStatus } from "./ir.js";
 export declare function parseGraph(data: unknown): GraphFile;
 /** In-process graph. Persistence is the host's file tools, not this module. */
 export declare class GraphStore {
+    readonly host: Host;
     private data;
+    constructor(host?: Host);
     load(): GraphFile;
     replace(graph: GraphFile): void;
     dump(): string;
