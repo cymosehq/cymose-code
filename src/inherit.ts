@@ -1,6 +1,6 @@
 import type { GraphNode } from "./ir.js";
 
-/** Structured summary from POST /v1/code/summarize. */
+/** Structured summary the harness model writes. Stored in process. */
 export type SessionSummary = {
 	task: string;
 	files_touched: string[];
@@ -22,35 +22,74 @@ export function formatSummary(s: SessionSummary): string {
 	return lines.filter(Boolean).join("\n");
 }
 
+function bodyFor(node: GraphNode): string {
+	if (node.summary?.trim()) return node.summary.trim();
+	if (node.status === "failed" || node.status === "dead-end") {
+		return "(No summary stored — still a failed path. Do not retry it blindly.)";
+	}
+	return "(No summary yet.)";
+}
+
 /**
- * Text a later session should see. Failed and dead-end ancestors stay visible
- * so the model does not retry the same approach. Empty summaries are omitted
- * unless the node failed — then we still name it.
+ * Map a later session should see: ancestors, failed siblings, and anything
+ * promoted onto this node.
  */
-export function inheritText(current: GraphNode, ancestors: GraphNode[]): string {
+export function inheritText(
+	current: GraphNode,
+	ancestors: GraphNode[],
+	siblings: GraphNode[] = [],
+): string {
 	const lines = [
 		`You are on Cymose node "${current.title}" (${current.id}).`,
 		`Status: ${current.status}.`,
-		"This is a map of what was already tried. Do not treat it as a token-saving trick — read it.",
+		"This is a map of what was already tried. Read it before choosing an approach.",
 		"",
 	];
-	if (ancestors.length === 0) {
-		lines.push("No ancestor summaries yet. This is a root.");
-		return lines.join("\n");
-	}
-	lines.push("## Ancestors (root first)");
-	for (const node of ancestors) {
-		const tag = node.status === "dead-end" || node.status === "failed" ? " [do not repeat this approach]" : "";
-		lines.push(`### ${node.title} (${node.status})${tag}`);
-		if (node.summary?.trim()) lines.push(node.summary.trim());
-		else if (node.status === "failed" || node.status === "dead-end") {
-			lines.push("(No summary stored — still a failed path. Ask what broke before retrying it.)");
-		} else {
-			lines.push("(No summary yet.)");
-		}
+	if (current.promoted?.trim()) {
+		lines.push("## Folded in from a child");
+		lines.push(current.promoted.trim());
 		lines.push("");
 	}
+	if (ancestors.length === 0 && siblings.length === 0) {
+		lines.push("No ancestor or sibling context yet. This is a root.");
+		return lines.join("\n");
+	}
+	if (ancestors.length > 0) {
+		lines.push("## Ancestors (root first)");
+		for (const node of ancestors) {
+			const tag = node.status === "dead-end" || node.status === "failed" ? " [do not repeat]" : "";
+			lines.push(`### ${node.title} (${node.status})${tag}`);
+			lines.push(bodyFor(node));
+			if (node.promoted?.trim()) lines.push(`Folded in: ${node.promoted.trim()}`);
+			lines.push("");
+		}
+	}
+	const notable = siblings.filter((n) => n.id !== current.id);
+	if (notable.length > 0) {
+		lines.push("## Siblings (same parent)");
+		for (const node of notable) {
+			const tag = node.status === "dead-end" || node.status === "failed" ? " [do not repeat]" : "";
+			lines.push(`### ${node.title} (${node.status})${tag}`);
+			lines.push(bodyFor(node));
+			lines.push("");
+		}
+	}
 	return lines.join("\n").trimEnd();
+}
+
+/** Prompt-sized map for the focused node, or a short empty-state hint. */
+export function mapForPrompt(
+	focused: GraphNode | undefined,
+	ancestors: GraphNode[],
+	siblings: GraphNode[],
+): string {
+	if (!focused) {
+		return [
+			"Cymose is loaded. There is no focused node.",
+			"Call cymose_branch to start a short session, or cymose_load to restore a dump.",
+		].join(" ");
+	}
+	return inheritText(focused, ancestors, siblings);
 }
 
 export function treeListing(nodes: GraphNode[], focusedId: string | null): string {
@@ -66,11 +105,27 @@ export function treeListing(nodes: GraphNode[], focusedId: string | null): strin
 	const walk = (parentId: string | null, depth: number) => {
 		for (const n of byParent.get(parentId) ?? []) {
 			const mark = n.id === focusedId ? " ← focused" : "";
-			const sum = n.summary ? " has summary" : "";
-			lines.push(`${"  ".repeat(depth)}- ${n.title} [${n.status}] ${n.id}${mark}${sum}`);
+			const bits = [n.summary ? "summary" : "", n.promoted ? "folded" : ""].filter(Boolean);
+			const extra = bits.length ? ` (${bits.join(", ")})` : "";
+			lines.push(`${"  ".repeat(depth)}- ${n.title} [${n.status}] ${n.id}${mark}${extra}`);
 			walk(n.id, depth + 1);
 		}
 	};
 	walk(null, 0);
 	return lines.join("\n");
+}
+
+export function diffText(a: GraphNode, b: GraphNode): string {
+	return [
+		`# ${a.title} [${a.status}] ${a.id}`,
+		a.summary?.trim() || "(no summary)",
+		a.promoted?.trim() ? `Folded in: ${a.promoted.trim()}` : "",
+		"",
+		`# ${b.title} [${b.status}] ${b.id}`,
+		b.summary?.trim() || "(no summary)",
+		b.promoted?.trim() ? `Folded in: ${b.promoted.trim()}` : "",
+	]
+		.filter((line, i, all) => line !== "" || all[i - 1] !== "")
+		.join("\n")
+		.trim();
 }

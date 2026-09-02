@@ -2,7 +2,11 @@
 
 Plugins that put a **Cymose session graph** on a coding harness you already use.
 
-This is not a coding agent. The harness runs the loop, the tools, and the model. Cymose is the map: short sessions as nodes, ancestor summaries as context you can actually read, the Web canvas as the plan.
+This is not a coding agent. The harness runs the loop, the tools, and the model. Cymose is the map: short sessions as nodes, ancestor summaries as context you can actually read.
+
+The graph lives in the harness process. The focused node's map is injected into the system prompt when DSH exposes `systemPrompt`. Summaries, explore, diff, combine, pick, and promote are written by **that harness's model**. No Cymose account, no Cymose API — only the host's limits.
+
+To keep the graph after the process exits, call `cymose_dump` and let the **harness** save the JSON (its own file tools). Call `cymose_load` with that JSON at the start of a later session.
 
 The point is **seeing what you already tried** — including the path that failed — not shaving input tokens.
 
@@ -10,13 +14,11 @@ One graph. One adapter per harness. **DeepSeek Harness (dsh) is first**; others 
 
 ```
 cymose-code/
-  src/     graph IR, store, Cymose API (shared)
+  src/     graph IR and store (shared)
   dsh/     DeepSeek Harness plugin
   claude/  later
   cursor/  later
 ```
-
-The previous Cymose Code (own TUI, sidecar, `/v1/code/inference`) is archived as `cymose-code-legacy`. This repository replaces it.
 
 ## DeepSeek Harness
 
@@ -30,22 +32,29 @@ Or from a checkout:
 dsh plugin add link:/absolute/path/to/cymose-code
 ```
 
-Set `token` on the plugin config (bundle overlay or profile `cordis.patch.yml`). Create a token at [web.cymose.app](https://web.cymose.app) → Settings → Connected apps.
+Optional plugin config: `namespace` (in-process name if you keep more than one graph).
 
-Graph file: `<workspace>/.cymose/graph.json`.
+### Permissions
+
+This plugin does not open files, sockets, or credentials. Install has no `prepare` / `install` lifecycle scripts.
 
 ### Tools (dsh)
 
 | Tool | What it is for |
 |------|----------------|
-| `cymose_tree` | Map of nodes, focus, who has a summary |
+| `cymose_tree` | Map of nodes, focus, summaries |
 | `cymose_branch` | New node; inherits the parent chain |
 | `cymose_focus` | Pick the active node |
 | `cymose_inherit` | Ancestor text to read before repeating work |
 | `cymose_mark` | `done` / `failed` / `dead-end` |
-| `cymose_summarize` | Store a summary children will inherit (needs token) |
-| `cymose_sync` | Read-only Web canvas tree (needs token) |
-| `cymose_whoami` | Token check + credits |
+| `cymose_summarize` | Store a summary the host model wrote |
+| `cymose_explore` | Fork several sibling approaches |
+| `cymose_diff` | Two nodes' summaries side by side |
+| `cymose_combine` | Write a synthesis onto a node |
+| `cymose_promote` | Fold a child's outcome onto its parent |
+| `cymose_pick` | Copy summaries onto another node, labeled |
+| `cymose_dump` | JSON snapshot of the in-process graph |
+| `cymose_load` | Restore a snapshot |
 
 A child of a `failed` / `dead-end` node still sees that ancestor. That is the product.
 

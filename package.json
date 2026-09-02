@@ -1,7 +1,7 @@
 {
 	"name": "cymose-code",
-	"version": "0.1.0",
-	"description": "Cymose session graph as plugins for coding harnesses. See what you already tried — not another linear chat.",
+	"version": "0.1.2",
+	"description": "Local Cymose session graph for coding harnesses. The host runs inference; the graph stays in process.",
 	"license": "Apache-2.0",
 	"type": "module",
 	"main": "lib/src/index.js",
@@ -25,14 +25,28 @@
 		"LICENSE",
 		"NOTICE"
 	],
+	"engines": {
+		"node": ">=20"
+	},
 	"dsh": {
 		"bundle": {
 			"patch": "./dsh/cordis.patch.yml"
+		},
+		"compatibility": {
+			"dsh": ">=0.1.0-rc.8 <0.2.0",
+			"dshReleases": {
+				"0.1.2-alpha.2": "unknown",
+				"0.1.2-alpha.3": "unknown",
+				"0.1.2-alpha.4": "unknown"
+			},
+			"profiles": [
+				"web",
+				"headless"
+			]
 		}
 	},
 	"scripts": {
-		"build": "tsc",
-		"prepare": "tsc",
+		"build": "rm -rf lib && tsc",
 		"test": "vitest run",
 		"typecheck": "tsc --noEmit"
 	},
@@ -50,9 +64,6 @@
 	"peerDependencies": {
 		"@deepseek-ai/cordis": "^4.0.1",
 		"@deepseek-ai/dsh-tools": "^0.1.0-rc.6"
-	},
-	"dependencies": {
-		"@deepseek-ai/schemastery": "^3.18.1"
 	},
 	"devDependencies": {
 		"@deepseek-ai/cordis": "^4.0.1",

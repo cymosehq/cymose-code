@@ -1,9 +1,6 @@
-# Cymose graph — tools the model calls to branch, inherit, and close a node.
-# Install: dsh plugin add github:cymosehq/cymose-code
-# Token: web.cymose.app → Settings → Connected apps.
+# In-process graph. The harness may persist cymose_dump JSON if you want.
 - insert:
     - id: cymose
       name: cymose-code/dsh
       config:
-        apiUrl: https://api.cymose.app
-        token: ""
+        namespace: ""
