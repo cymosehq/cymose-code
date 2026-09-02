@@ -1,6 +1,6 @@
 {
 	"name": "cymose-code",
-	"version": "0.1.2",
+	"version": "0.1.3",
 	"description": "Local Cymose session graph for coding harnesses. The host runs inference; the graph stays in process.",
 	"license": "Apache-2.0",
 	"type": "module",
@@ -15,16 +15,24 @@
 			"types": "./lib/dsh/index.d.ts",
 			"default": "./lib/dsh/index.js"
 		},
+		"./mcp": {
+			"types": "./lib/mcp/index.d.ts",
+			"default": "./lib/mcp/index.js"
+		},
 		"./dsh/cordis.patch.yml": "./dsh/cordis.patch.yml",
 		"./package.json": "./package.json"
 	},
 	"files": [
 		"lib/src",
 		"lib/dsh",
+		"lib/mcp",
 		"dsh/cordis.patch.yml",
 		"LICENSE",
 		"NOTICE"
 	],
+	"bin": {
+		"cymose-mcp": "lib/mcp/stdio.js"
+	},
 	"engines": {
 		"node": ">=20"
 	},
@@ -55,7 +63,8 @@
 		"deepseek-harness",
 		"dsh",
 		"dsh-plugin",
-		"cordis"
+		"cordis",
+		"mcp"
 	],
 	"repository": {
 		"type": "git",

@@ -10,6 +10,6 @@
 		"skipLibCheck": true,
 		"esModuleInterop": true
 	},
-	"include": ["src/**/*.ts", "dsh/**/*.ts"],
+	"include": ["src/**/*.ts", "dsh/**/*.ts", "mcp/**/*.ts"],
 	"exclude": ["src/**/*.test.ts"]
 }
