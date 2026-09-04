@@ -1,6 +1,6 @@
 {
 	"name": "cymose-code",
-	"version": "0.1.3",
+	"version": "0.1.4",
 	"description": "Local Cymose session graph for coding harnesses. The host runs inference; the graph stays in process.",
 	"license": "Apache-2.0",
 	"type": "module",

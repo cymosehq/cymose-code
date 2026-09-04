@@ -1,6 +1,6 @@
 import { GraphStore } from "./graph.js";
-import { diffText, formatSummary, treeListing } from "./inherit.js";
-import type { NodeStatus } from "./ir.js";
+import { diffText, formatSummary, treeListing, voiceFor } from "./inherit.js";
+import { parseKind, type NodeStatus } from "./ir.js";
 
 export type ToolSpec = {
 	name: string;
@@ -18,13 +18,28 @@ export const toolSpecs: ToolSpec[] = [
 	{
 		name: "cymose_tree",
 		description:
-			"Show the Cymose session graph: what was tried, what failed, what is focused. Call this to see context.",
+			"Show the Cymose graph: what is on the map, what failed, what is focused. Call this to see context.",
 		inputSchema: { type: "object", properties: {} },
+	},
+	{
+		name: "cymose_kind",
+		description:
+			"Set how to read this graph: session (what was tried), todo (open work), steps (procedure with forks), or answer (claims and evidence). Same tools; different map wording.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				kind: {
+					type: "string",
+					description: "session | todo | steps | answer",
+				},
+			},
+			required: ["kind"],
+		},
 	},
 	{
 		name: "cymose_branch",
 		description:
-			"Start a new Cymose node (a short session). Children inherit ancestor summaries. Omit parent_id to fork from the focused node, or to create a root if the graph is empty.",
+			"Start a new Cymose node. Children inherit ancestor summaries. Omit parent_id to fork from the focused node, or to create a root if the graph is empty.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -168,7 +183,7 @@ export const toolSpecs: ToolSpec[] = [
 ];
 
 export const MAP_INSTRUCTIONS =
-	"Cymose is a session map, not a coding agent. Call cymose_tree or cymose_inherit before repeating work. Persist with cymose_dump; restore with cymose_load. The graph lives in this process.";
+	"Cymose is a map, not a coding agent. Call cymose_kind to choose session, todo, steps, or answer. Call cymose_tree or cymose_inherit before repeating work. Persist with cymose_dump; restore with cymose_load. The graph lives in this process.";
 
 function asRecord(args: unknown): Record<string, unknown> {
 	if (!args || typeof args !== "object" || Array.isArray(args)) return {};
@@ -223,7 +238,15 @@ export function runTool(store: GraphStore, name: string, rawArgs: unknown = {}):
 	switch (name) {
 		case "cymose_tree": {
 			const graph = store.load();
-			return treeListing(graph.nodes, graph.focused_id);
+			return treeListing(graph.nodes, graph.focused_id, graph.kind);
+		}
+		case "cymose_kind": {
+			const kind = parseKind(req(args, "kind"));
+			store.setKind(kind);
+			const voice = voiceFor(kind);
+			const graph = store.load();
+			if (!graph.focused_id) return `${voice.header}\n${voice.emptyPrompt}`;
+			return store.focusedContext();
 		}
 		case "cymose_branch": {
 			const loaded = store.load();
@@ -271,7 +294,7 @@ export function runTool(store: GraphStore, name: string, rawArgs: unknown = {}):
 		case "cymose_explore": {
 			const parent = requireId(store, str(args, "parent_id"));
 			const nodes = store.explore(parent, titlesFrom(args));
-			return ["Forked approaches (parent stays focused):", ...nodes.map((n) => `- ${n.title} ${n.id}`), "", store.focusedContext()].join(
+			return [voiceFor(store.kind()).forked, ...nodes.map((n) => `- ${n.title} ${n.id}`), "", store.focusedContext()].join(
 				"\n",
 			);
 		}
@@ -299,7 +322,7 @@ export function runTool(store: GraphStore, name: string, rawArgs: unknown = {}):
 		case "cymose_load": {
 			store.restore(req(args, "json"));
 			const snap = store.load();
-			return treeListing(snap.nodes, snap.focused_id);
+			return treeListing(snap.nodes, snap.focused_id, snap.kind);
 		}
 		default:
 			throw new Error(`Unknown tool ${name}.`);
