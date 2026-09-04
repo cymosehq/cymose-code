@@ -1,14 +1,23 @@
 # Cymose Code
 
-Plugins that put a **Cymose session graph** on a coding harness you already use.
+Plugins that put a **Cymose graph** on a coding harness you already use.
 
-This is not a coding agent. The harness runs the loop, the tools, and the model. Cymose is the map: short sessions as nodes, ancestor summaries as context you can actually read.
+This is not a coding agent. The harness runs the loop, the tools, and the model. Cymose is the map: nodes with ancestor summaries you can actually read. The same canvas — branch, explore, mark failed, promote — can be a **session** graph, a **todo** graph, a **steps** graph, or an **answer** graph. Call `cymose_kind` to switch the wording; the tools do not change.
 
 The graph lives in the adapter process. On DeepSeek Harness the focused node's map is injected into the system prompt when DSH exposes `systemPrompt`. On MCP, that map is in the server instructions plus `cymose_tree` / `cymose_inherit`. Summaries, explore, diff, combine, pick, and promote are written by **that harness's model**. No Cymose account, no Cymose API — only the host's limits.
 
 To keep the graph after the process exits, call `cymose_dump` and let the **harness** save the JSON (its own file tools). Call `cymose_load` with that JSON at the start of a later session.
 
 The point is **seeing what you already tried** — including the path that failed — not shaving input tokens.
+
+| Kind | Node means | `failed` / `dead-end` |
+|------|------------|------------------------|
+| `session` | a short attempt | do not repeat |
+| `todo` | an item of work | blocked / dropped, still on the map |
+| `steps` | a step in a procedure | abandoned alternative, not a linear checklist |
+| `answer` | a claim or piece of evidence | rejected line of argument |
+
+`cymose_kind` only changes the map text. Explore, promote, pick, dump/load stay the same.
 
 One graph. One adapter per harness. **DeepSeek Harness (dsh)** and **MCP** (Cursor, Claude Code, and anything else that speaks MCP stdio) are first.
 
@@ -42,6 +51,7 @@ This plugin does not open files, sockets, or credentials. Install has no `prepar
 | Tool | What it is for |
 |------|----------------|
 | `cymose_tree` | Map of nodes, focus, summaries |
+| `cymose_kind` | `session` / `todo` / `steps` / `answer` |
 | `cymose_branch` | New node; inherits the parent chain |
 | `cymose_focus` | Pick the active node |
 | `cymose_inherit` | Ancestor text to read before repeating work |

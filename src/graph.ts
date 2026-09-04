@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { inheritText, mapForPrompt } from "./inherit.js";
-import { emptyGraph, GRAPH_VERSION, type GraphFile, type GraphNode, type Host, type NodeStatus } from "./ir.js";
+import { emptyGraph, GRAPH_VERSION, parseKind, type GraphFile, type GraphKind, type GraphNode, type Host, type NodeStatus } from "./ir.js";
 
 function now(): string {
 	return new Date().toISOString();
@@ -13,6 +13,7 @@ export function parseGraph(data: unknown): GraphFile {
 	if (!Array.isArray(g.nodes)) throw new Error("Graph is missing nodes.");
 	return {
 		version: GRAPH_VERSION,
+		kind: parseKind(g.kind),
 		focused_id: typeof g.focused_id === "string" || g.focused_id === null ? g.focused_id : null,
 		nodes: g.nodes.map((n) => ({
 			...n,
@@ -38,6 +39,15 @@ export class GraphStore {
 
 	replace(graph: GraphFile): void {
 		this.data = graph;
+	}
+
+	kind(): GraphKind {
+		return this.data.kind;
+	}
+
+	setKind(kind: GraphKind): GraphKind {
+		this.data.kind = kind;
+		return kind;
 	}
 
 	dump(): string {
@@ -156,13 +166,13 @@ export class GraphStore {
 	context(id: string): string {
 		const node = this.get(id);
 		if (!node) throw new Error(`No node ${id}.`);
-		return inheritText(node, this.ancestors(id), this.siblings(id));
+		return inheritText(node, this.ancestors(id), this.siblings(id), this.data.kind);
 	}
 
 	focusedContext(): string {
 		const node = this.focused();
-		if (!node) return mapForPrompt(undefined, [], []);
-		return inheritText(node, this.ancestors(node.id), this.siblings(node.id));
+		if (!node) return mapForPrompt(undefined, [], [], this.data.kind);
+		return inheritText(node, this.ancestors(node.id), this.siblings(node.id), this.data.kind);
 	}
 
 	private patch(id: string, fields: Partial<GraphNode>): GraphNode {
