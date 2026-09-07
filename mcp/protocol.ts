@@ -3,7 +3,7 @@ import { MAP_INSTRUCTIONS, runTool, toolSpecs } from "../src/tools.js";
 
 export const PROTOCOL = "2024-11-05";
 export const SERVER_NAME = "cymose-code";
-export const SERVER_VERSION = "0.1.3";
+export const SERVER_VERSION = "0.1.4";
 
 type JsonRpcId = string | number | null;
 

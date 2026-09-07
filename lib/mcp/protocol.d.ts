@@ -1,7 +1,7 @@
 import { GraphStore } from "../src/graph.js";
 export declare const PROTOCOL = "2024-11-05";
 export declare const SERVER_NAME = "cymose-code";
-export declare const SERVER_VERSION = "0.1.3";
+export declare const SERVER_VERSION = "0.1.4";
 type JsonRpcId = string | number | null;
 export type JsonRpcRequest = {
     jsonrpc?: string;
