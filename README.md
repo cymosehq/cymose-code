@@ -2,6 +2,17 @@
 
 Plugins that put a **Cymose graph** on a coding harness you already use.
 
+> **LangGraph is the graph you designed. Cymose is the graph you ended up with.**
+
+Graph frameworks describe what *should* happen: you author nodes and edges
+before the run, and the graph is a plan you then debug. This graph does not
+exist before the work. It is produced by the work — every node is something
+that actually happened, and the ones that failed are kept rather than pruned —
+and the agent grows it by calling tools mid-task rather than by you writing it
+out in advance.
+
+Their graph is the plan. This one is the record.
+
 This is not a coding agent. The harness runs the loop, the tools, and the model. Cymose is the map: nodes with ancestor summaries you can actually read. The same canvas — branch, explore, mark failed, promote — can be a **session** graph, a **todo** graph, a **steps** graph, or an **answer** graph. Call `cymose_kind` to switch the wording; the tools do not change.
 
 The graph lives in the adapter process. On DeepSeek Harness the focused node's map is injected into the system prompt when DSH exposes `systemPrompt`. On MCP, that map is in the server instructions plus `cymose_tree` / `cymose_inherit`. Summaries, explore, diff, combine, pick, and promote are written by **that harness's model**. No Cymose account, no Cymose API — only the host's limits.
